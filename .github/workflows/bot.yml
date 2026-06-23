@@ -1,0 +1,67 @@
+name: 🤖 FunsDiia Bot
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+  schedule:
+    # Перезапуск кожні 5 годин (GitHub Actions лімітує до 6г)
+    - cron: '0 */5 * * *'
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: 🔄 Restore data files
+        uses: actions/cache@v4
+        with:
+          path: |
+            users_data.json
+            orders_data.json
+            feedback_data.json
+            tariffs_data.json
+            promo_data.json
+            action_logs.json
+            banned_users.json
+            bot_settings.json
+          key: bot-data-${{ github.run_id }}
+          restore-keys: |
+            bot-data-
+
+      - name: 🚀 Run Bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
+          BOT_USERNAME: ${{ secrets.BOT_USERNAME }}
+          GITHUB_ACTIONS: "true"
+          LOG_LEVEL: INFO
+        run: python bot.py
+
+      - name: 💾 Save data files
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            users_data.json
+            orders_data.json
+            feedback_data.json
+            tariffs_data.json
+            promo_data.json
+            action_logs.json
+            banned_users.json
+            bot_settings.json
+          key: bot-data-${{ github.run_id }}
