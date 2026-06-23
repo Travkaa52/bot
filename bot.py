@@ -54,7 +54,9 @@ SETTINGS_FILE = "bot_settings.json"
     AWAIT_ORDER_COMPLETE_FILE, AWAIT_REPLY_TO_USER, AWAIT_CUSTOM_PAYMENT_TEXT,
     AWAIT_REJECT_REASON, AWAIT_TARIFF_EDIT_PRICE, AWAIT_TARIFF_EDIT_NAME,
     AWAIT_TARIFF_EDIT_EMOJI,
-) = range(23)
+    # GitHub Pages
+    AWAIT_PAGES_FILE, AWAIT_PAGES_REPO_NAME, AWAIT_PAGES_GH_TOKEN,
+) = range(26)
 
 DEFAULT_TARIFFS = {
     "1_day":   {"name": "1 день",   "price": 20,  "days": 1,   "emoji": "🌙", "active": True},
@@ -797,6 +799,8 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state == AWAIT_PHOTO and update.message.photo:
         await process_order(update, context, uid)
+    elif is_admin(uid) and state == AWAIT_PAGES_FILE:
+        await handle_pages_file(update, context)
     elif is_admin(uid) and state == AWAIT_ORDER_COMPLETE_FILE:
         await process_complete_order_files(update, context)
     else:
@@ -1170,6 +1174,28 @@ async def handle_admin_state(update, context, state, text, uid):
             parse_mode="HTML"
         )
 
+    if state == AWAIT_PAGES_REPO_NAME:
+        new_name = text.strip().replace(" ", "-")
+        cfg = load_pages_settings()
+        cfg["repo_name"] = new_name
+        save_pages_settings(cfg)
+        context.user_data["state"] = None
+        await update.message.reply_text(
+            f"✅ Назву репо змінено на: <code>{new_name}</code>",
+            parse_mode="HTML"
+        )
+
+    if state == AWAIT_PAGES_GH_TOKEN:
+        new_token = text.strip()
+        cfg = load_pages_settings()
+        cfg["gh_token"] = new_token
+        save_pages_settings(cfg)
+        context.user_data["state"] = None
+        await update.message.reply_text(
+            "✅ <b>GitHub токен збережено!</b>\n\nТепер можна завантажити файли і натиснути 🚀 PUSH.",
+            parse_mode="HTML"
+        )
+
 # ─────────────────────────────────────────
 #  АДМІН ЗАВЕРШЕННЯ ЗАМОВЛЕННЯ (файли)
 # ─────────────────────────────────────────
@@ -1234,6 +1260,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("💬 Відгуки", callback_data="adm:feedbacks")],
         [InlineKeyboardButton("⚙️ Налаштування", callback_data="adm:settings"),
          InlineKeyboardButton("📜 Логи", callback_data="adm:logs")],
+        [InlineKeyboardButton("🌐 GitHub Pages", callback_data="adm:pages")],
         [back_btn("home")],
     )
     await q.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
@@ -1875,6 +1902,257 @@ async def adm_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─────────────────────────────────────────
 #  CALLBACK ROUTER
 # ─────────────────────────────────────────
+# ─────────────────────────────────────────
+#  GITHUB PAGES
+# ─────────────────────────────────────────
+PAGES_FILES_DIR = "pages_files"   # папка де зберігаємо файли для деплою
+PAGES_SETTINGS_FILE = "pages_settings.json"
+
+def load_pages_settings() -> dict:
+    try:
+        with open(PAGES_SETTINGS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"repo_name": "funsDiia-pages", "gh_token": "", "branch": "main"}
+
+def save_pages_settings(data: dict):
+    with open(PAGES_SETTINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def list_pages_files() -> list:
+    os.makedirs(PAGES_FILES_DIR, exist_ok=True)
+    return sorted(os.listdir(PAGES_FILES_DIR))
+
+def _gh_headers(token: str) -> dict:
+    return {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+def _gh_request(method: str, path: str, token: str, **kwargs):
+    import requests as _req
+    resp = _req.request(method, f"https://api.github.com{path}",
+                        headers=_gh_headers(token), **kwargs)
+    resp.raise_for_status()
+    return resp.json() if resp.text else {}
+
+async def pages_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Головне меню GitHub Pages."""
+    q = update.callback_query
+    await q.answer()
+    cfg = load_pages_settings()
+    files = list_pages_files()
+    has_token = bool(cfg.get("gh_token"))
+    token_status = "✅ встановлено" if has_token else "❌ не встановлено"
+    files_text = "\n".join(f"  📄 {f}" for f in files) if files else "  (порожньо)"
+    text = (
+        f"🌐 <b>GitHub Pages</b>\n\n"
+        f"📦 Репо: <code>{cfg.get('repo_name', 'funsDiia-pages')}</code>\n"
+        f"🔑 Токен: {token_status}\n\n"
+        f"<b>Файли для деплою:</b>\n{files_text}"
+    )
+    kb = mkb(
+        [InlineKeyboardButton("📤 Завантажити файл", callback_data="pages:upload"),
+         InlineKeyboardButton("🗑️ Видалити файл", callback_data="pages:delete_list")],
+        [InlineKeyboardButton("⚙️ Назва репо", callback_data="pages:set_repo"),
+         InlineKeyboardButton("🔑 Встановити токен", callback_data="pages:set_token")],
+        [InlineKeyboardButton("🚀 PUSH на GitHub", callback_data="pages:push")],
+        [back_btn("admin_panel")],
+    )
+    await q.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+
+@admin_check
+async def pages_upload_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    context.user_data["state"] = AWAIT_PAGES_FILE
+    await q.edit_message_text(
+        "📤 <b>Надішліть файл</b> (документ, HTML, CSS, зображення тощо).\n\n"
+        "Він буде збережений у папці для деплою на GitHub Pages.",
+        reply_markup=mkb([back_btn("adm:pages")]),
+        parse_mode="HTML"
+    )
+
+@admin_check
+async def pages_set_repo_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    context.user_data["state"] = AWAIT_PAGES_REPO_NAME
+    cfg = load_pages_settings()
+    await q.edit_message_text(
+        f"⚙️ <b>Назва GitHub репо</b>\n\nПоточна: <code>{cfg.get('repo_name')}</code>\n\n"
+        f"Введіть нову назву репо (латиницею, без пробілів):",
+        reply_markup=mkb([back_btn("adm:pages")]),
+        parse_mode="HTML"
+    )
+
+@admin_check
+async def pages_set_token_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    context.user_data["state"] = AWAIT_PAGES_GH_TOKEN
+    await q.edit_message_text(
+        "🔑 <b>GitHub Personal Access Token</b>\n\n"
+        "Потрібні права: <code>repo</code> + <code>pages</code>\n\n"
+        "Створити: github.com → Settings → Developer settings → Personal access tokens\n\n"
+        "Введіть токен (він буде збережений локально):",
+        reply_markup=mkb([back_btn("adm:pages")]),
+        parse_mode="HTML"
+    )
+
+@admin_check
+async def pages_delete_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    files = list_pages_files()
+    if not files:
+        await q.answer("📭 Немає файлів для видалення", show_alert=True)
+        return
+    kb_rows = [[InlineKeyboardButton(f"🗑 {f}", callback_data=f"pages:del:{f}")] for f in files]
+    kb_rows.append([back_btn("adm:pages")])
+    await q.edit_message_text(
+        "🗑️ <b>Оберіть файл для видалення:</b>",
+        reply_markup=mkb(*kb_rows),
+        parse_mode="HTML"
+    )
+
+@admin_check
+async def pages_delete_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    filename = q.data.split("pages:del:", 1)[1]
+    filepath = os.path.join(PAGES_FILES_DIR, filename)
+    if os.path.exists(filepath):
+        os.remove(filepath)
+        await q.answer(f"✅ {filename} видалено", show_alert=True)
+    await pages_menu(update, context)
+
+@admin_check
+async def pages_push(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пушить файли на GitHub і вмикає Pages."""
+    import base64
+    import requests as _req
+
+    q = update.callback_query
+    await q.answer()
+    cfg = load_pages_settings()
+    token = cfg.get("gh_token", "")
+    repo_name = cfg.get("repo_name", "funsDiia-pages")
+    branch = cfg.get("branch", "main")
+
+    if not token:
+        await q.edit_message_text(
+            "❌ <b>Токен не встановлено!</b>\n\nСпочатку встановіть GitHub токен у налаштуваннях.",
+            reply_markup=mkb([back_btn("adm:pages")]),
+            parse_mode="HTML"
+        )
+        return
+
+    files = list_pages_files()
+    if not files:
+        await q.edit_message_text(
+            "❌ <b>Немає файлів для деплою!</b>\n\nСпочатку завантажте файли.",
+            reply_markup=mkb([back_btn("adm:pages")]),
+            parse_mode="HTML"
+        )
+        return
+
+    await q.edit_message_text("⏳ <b>Починаємо деплой...</b>", parse_mode="HTML")
+
+    try:
+        # 1. Отримати username
+        user_data = _gh_request("GET", "/user", token)
+        username = user_data["login"]
+
+        # 2. Створити або перевірити репо
+        try:
+            _gh_request("GET", f"/repos/{username}/{repo_name}", token)
+        except _req.HTTPError as e:
+            if e.response.status_code == 404:
+                _gh_request("POST", "/user/repos", token, json={
+                    "name": repo_name,
+                    "description": "GitHub Pages site",
+                    "private": False,
+                    "auto_init": False,
+                })
+                import time as _time; _time.sleep(2)
+            else:
+                raise
+
+        # 3. Запушити файли
+        pushed = 0
+        for filename in files:
+            filepath = os.path.join(PAGES_FILES_DIR, filename)
+            with open(filepath, "rb") as f:
+                content = base64.b64encode(f.read()).decode()
+
+            # Перевірити SHA (якщо файл вже є)
+            sha = None
+            try:
+                existing = _gh_request("GET", f"/repos/{username}/{repo_name}/contents/{filename}", token,
+                                       params={"ref": branch})
+                sha = existing.get("sha")
+            except Exception:
+                pass
+
+            payload = {"message": f"deploy: {filename}", "content": content, "branch": branch}
+            if sha:
+                payload["sha"] = sha
+            _gh_request("PUT", f"/repos/{username}/{repo_name}/contents/{filename}", token, json=payload)
+            pushed += 1
+
+        # 4. Увімкнути Pages
+        pages_url = f"https://{username}.github.io/{repo_name}/"
+        try:
+            _gh_request("GET", f"/repos/{username}/{repo_name}/pages", token)
+        except _req.HTTPError:
+            try:
+                _gh_request("POST", f"/repos/{username}/{repo_name}/pages", token,
+                            json={"source": {"branch": branch, "path": "/"}})
+            except Exception:
+                pass  # Може вже бути активовано
+
+        await q.edit_message_text(
+            f"✅ <b>Деплой успішний!</b>\n\n"
+            f"📁 Запушено файлів: <b>{pushed}</b>\n"
+            f"📦 Репо: <code>{username}/{repo_name}</code>\n\n"
+            f"🔗 <b>GitHub Pages:</b>\n{pages_url}\n\n"
+            f"⏱ Сайт може з'явитись через 1-2 хвилини.",
+            reply_markup=mkb([back_btn("adm:pages")]),
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+        logger.error(f"pages_push error: {e}", exc_info=True)
+        await q.edit_message_text(
+            f"❌ <b>Помилка деплою</b>\n\n<code>{str(e)[:400]}</code>",
+            reply_markup=mkb([back_btn("adm:pages")]),
+            parse_mode="HTML"
+        )
+
+async def handle_pages_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отримати файл від адміна і зберегти в PAGES_FILES_DIR."""
+    os.makedirs(PAGES_FILES_DIR, exist_ok=True)
+    doc = update.message.document
+    if not doc:
+        await update.message.reply_text("❌ Надішліть файл як документ.")
+        return
+    filename = doc.file_name or f"file_{doc.file_id[:8]}"
+    tg_file = await context.bot.get_file(doc.file_id)
+    filepath = os.path.join(PAGES_FILES_DIR, filename)
+    await tg_file.download_to_drive(filepath)
+    context.user_data.pop("state", None)
+    files = list_pages_files()
+    files_text = "\n".join(f"  📄 {f}" for f in files)
+    await update.message.reply_text(
+        f"✅ <b>Файл збережено:</b> <code>{filename}</code>\n\n"
+        f"<b>Всі файли для деплою:</b>\n{files_text}\n\n"
+        f"Поверніться до меню GitHub Pages щоб запустити пуш.",
+        parse_mode="HTML"
+    )
+
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -1911,6 +2189,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "adm:feedbacks": adm_feedbacks,
             "adm:settings": adm_settings,
             "adm:logs": adm_logs,
+            "adm:pages": pages_menu,
+            "pages:upload": pages_upload_prompt,
+            "pages:set_repo": pages_set_repo_prompt,
+            "pages:set_token": pages_set_token_prompt,
+            "pages:delete_list": pages_delete_list,
+            "pages:push": pages_push,
             "broadcast_go": broadcast_go,
             "tariff_add": tariff_add,
             "adm_create_promo": adm_create_promo,
@@ -1944,6 +2228,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if d.startswith("adm_ban:"): return await adm_ban(update, context)
         if d.startswith("adm_vip:"): return await adm_vip(update, context)
         if d.startswith("adm_msg:"): return await adm_msg(update, context)
+        if d.startswith("pages:del:"): return await pages_delete_file(update, context)
 
     except Exception as e:
         logger.error(f"button_handler error [{d}]: {e}", exc_info=True)
@@ -1971,6 +2256,7 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("📢 Розсилка", callback_data="adm:broadcast")],
         [InlineKeyboardButton("⚙️ Налаштування", callback_data="adm:settings"),
          InlineKeyboardButton("📜 Логи", callback_data="adm:logs")],
+        [InlineKeyboardButton("🌐 GitHub Pages", callback_data="adm:pages")],
     )
     await update.message.reply_text(
         f"👑 <b>Адмін-панель</b>\n\n👥 {len(users)} юзерів | 📦 {pending} в черзі\n🕐 {now_fmt()}",
