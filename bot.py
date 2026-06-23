@@ -413,7 +413,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bal = u.get("balance", 0)
     bal_text = f" | 💰 {bal}₴" if bal > 0 else ""
 
-    kb = mkb(
+    kb_rows = [
         [InlineKeyboardButton("🛍️ Каталог тарифів", callback_data="catalog")],
         [InlineKeyboardButton("🎟️ Промо-код", callback_data="promo_enter"),
          InlineKeyboardButton("👥 Реферали", callback_data="ref_menu")],
@@ -421,9 +421,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("💬 Зв'язок", callback_data="feedback")],
         [InlineKeyboardButton(f"👤 Профіль{vip_badge}{bal_text}", callback_data="profile")],
         [InlineKeyboardButton("ℹ️ Про нас", callback_data="about")],
-    )
+    ]
     if is_admin(uid):
-        kb.inline_keyboard.append([InlineKeyboardButton("👑 Адмін-панель", callback_data="admin_panel")])
+        kb_rows.append([InlineKeyboardButton("👑 Адмін-панель", callback_data="admin_panel")])
+    kb = InlineKeyboardMarkup(kb_rows)
 
     await update.effective_message.reply_text(welcome, reply_markup=kb, parse_mode="HTML")
 
