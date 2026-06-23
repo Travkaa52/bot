@@ -1,0 +1,52 @@
+name: 🌐 Deploy to GitHub Pages
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_name:
+        description: 'Назва репо для GitHub Pages'
+        required: false
+        default: 'funsDiia-pages'
+      deploy_files:
+        description: 'Файли через кому (порожньо = всі у корені)'
+        required: false
+        default: ''
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install requests
+        run: pip install requests
+
+      - name: 🚀 Deploy to GitHub Pages
+        id: deploy
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAGES_TOKEN }}
+          GH_USERNAME: ${{ github.actor }}
+          PAGES_REPO: ${{ github.event.inputs.repo_name || 'funsDiia-pages' }}
+          DEPLOY_FILES: ${{ github.event.inputs.deploy_files }}
+        run: python deploy_pages.py
+
+      - name: 📋 Print Pages URL
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔗 GitHub Pages URL: ${{ steps.deploy.outputs.pages_url }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: 💾 Upload pages_url artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pages-url
+          path: pages_url.txt
