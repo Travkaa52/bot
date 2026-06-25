@@ -5,8 +5,13 @@ on:
     branches: [main, master]
   workflow_dispatch:
   schedule:
-    # Перезапуск кожні 5 годин (GitHub Actions лімітує до 6г)
+    # Запуск каждые 5 часов (300 минут)
     - cron: '0 */5 * * *'
+
+# Контроль параллельности: если запускается новый процесс, старый будет отменен (потушен)
+concurrency:
+  group: bot-worker
+  cancel-in-progress: true
 
 jobs:
   run-bot:
@@ -49,7 +54,9 @@ jobs:
           BOT_USERNAME: ${{ secrets.BOT_USERNAME }}
           GITHUB_ACTIONS: "true"
           LOG_LEVEL: INFO
-        run: python bot.py
+        # Ограничиваем время работы скрипта 295 минутами (чуть меньше 5 часов).
+        # Скрипт завершится сам, чтобы успеть сохранить кэш до того, как его убьет новый процесс.
+        run: timeout 295m python bot.py || true
 
       - name: 💾 Save data files
         if: always()
