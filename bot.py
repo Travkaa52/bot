@@ -56,8 +56,8 @@ AI_ENABLED       = bool(DEEPSEEK_API_KEY)   # вимикається якщо к
 
 TIMEZONE        = pytz.timezone("Europe/Kyiv")
 BOT_USERNAME    = os.getenv("BOT_USERNAME", "FunsDiia_bot")
-REFERRAL_REWARD = int(os.getenv("REFERRAL_REWARD", 19))
-MIN_WITHDRAW    = int(os.getenv("MIN_WITHDRAW", 50))
+REFERRAL_REWARD = get_env_int("REFERRAL_REWARD", 19)
+MIN_WITHDRAW    = get_env_int("MIN_WITHDRAW", 50)
 
 # Файли БД
 USERS_FILE         = "users_data.json"
