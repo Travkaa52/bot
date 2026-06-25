@@ -43,7 +43,7 @@ _raw_group = os.getenv("GROUP_CHAT_ID", "")
 GROUP_CHAT_ID: Optional[int] = int(_raw_group) if _raw_group.lstrip("-").isdigit() else None
 
 # GitHub токен ТІЛЬКИ з env — ніколи не з чату
-PAGES_GH_TOKEN: str = os.getenv("PAGES_GH_TOKEN", "")
+PAGES_GH_TOKEN: str = os.getenv("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", "")
 
 TIMEZONE        = pytz.timezone("Europe/Kyiv")
 BOT_USERNAME    = os.getenv("BOT_USERNAME", "FunsDiia_bot")
