@@ -30,34 +30,40 @@ from telegram.error import Forbidden, BadRequest
 # ─────────────────────────────────────────
 load_dotenv()
 
+# Допоміжна функція для безпечного отримання чисел
+def _get_env_int(key: str, default: int) -> int:
+    val = os.getenv(key, "").strip()
+    return int(val) if val.isdigit() else default
+
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TOKEN")
 if not TOKEN:
     raise ValueError("❌ Токен бота не знайдено! Встановіть TELEGRAM_BOT_TOKEN у secrets.")
 
 def _parse_int_list(s: str) -> list[int]:
+    # Використовуємо .strip() для коректної обробки
     return [int(x.strip()) for x in s.split(",") if x.strip().lstrip("-").isdigit()]
 
 ADMIN_IDS: list[int]   = _parse_int_list(os.getenv("ADMIN_IDS", os.getenv("ADMIN_CHAT_ID", "")))
 if not ADMIN_IDS:
     raise ValueError("❌ ADMIN_IDS не задано!")
 
-# ID групи — може бути від'ємним (супергрупа)
-_raw_group = os.getenv("GROUP_CHAT_ID", "")
+# ID групи
+_raw_group = os.getenv("GROUP_CHAT_ID", "").strip()
 GROUP_CHAT_ID: Optional[int] = int(_raw_group) if _raw_group.lstrip("-").isdigit() else None
 
-# GitHub токен ТІЛЬКИ з env/GitHub Secrets — ніколи не з чату і не з коду
+# GitHub та DeepSeek конфіг
 PAGES_GH_TOKEN: str = os.getenv("PAGES_GH_TOKEN", "")
-
-# DeepSeek API (V3 / "deepseek-chat" = V3, безкоштовний tier є)
 DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
-DEEPSEEK_MODEL   = "deepseek-chat"          # DeepSeek-V3
+DEEPSEEK_MODEL   = "deepseek-chat"
 DEEPSEEK_URL     = "https://api.deepseek.com/chat/completions"
-AI_ENABLED       = bool(DEEPSEEK_API_KEY)   # вимикається якщо ключ не задано
+AI_ENABLED       = bool(DEEPSEEK_API_KEY)
 
 TIMEZONE        = pytz.timezone("Europe/Kyiv")
 BOT_USERNAME    = os.getenv("BOT_USERNAME", "FunsDiia_bot")
-REFERRAL_REWARD = get_env_int("REFERRAL_REWARD", 19)
-MIN_WITHDRAW    = get_env_int("MIN_WITHDRAW", 50)
+
+# Використовуємо безпечне отримання чисел
+REFERRAL_REWARD = _get_env_int("REFERRAL_REWARD", 19)
+MIN_WITHDRAW    = _get_env_int("MIN_WITHDRAW", 50)
 
 # Файли БД
 USERS_FILE         = "users_data.json"
