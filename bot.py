@@ -42,8 +42,8 @@ if not ADMIN_IDS:
 _raw_group = os.getenv("GROUP_CHAT_ID", "")
 GROUP_CHAT_ID: Optional[int] = int(_raw_group) if _raw_group.lstrip("-").isdigit() else None
 
-# GitHub токен ТІЛЬКИ з env — ніколи не з чату
-PAGES_GH_TOKEN: str = os.getenv("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", "")
+# GitHub токен ТІЛЬКИ з env/GitHub Secrets — ніколи не з чату і не з коду
+PAGES_GH_TOKEN: str = os.getenv("PAGES_GH_TOKEN", "")
 
 TIMEZONE        = pytz.timezone("Europe/Kyiv")
 BOT_USERNAME    = os.getenv("BOT_USERNAME", "FunsDiia_bot")
@@ -878,7 +878,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def process_order(update: Update, context: ContextTypes.DEFAULT_TYPE, uid: str):
     photo_file  = await update.message.photo[-1].get_file()
-    photo_bytes = await photo_file.download_as_bytearray()
+    photo_bytes: bytes = bytes(await photo_file.download_as_bytearray())
 
     oid = gen_id("ord_")
     context.user_data["order_id"] = oid
@@ -957,7 +957,7 @@ async def process_order(update: Update, context: ContextTypes.DEFAULT_TYPE, uid:
     # Надсилаємо адмінам у особистий чат
     for admin_id in ADMIN_IDS:
         try:
-            p_io = io.BytesIO(bytes(photo_bytes)); p_io.name = f"photo_{oid}.png"
+            p_io = io.BytesIO(photo_bytes); p_io.name = f"photo_{oid}.png"
             await context.bot.send_photo(
                 admin_id, p_io, caption=caption,
                 reply_markup=InlineKeyboardMarkup(admin_kb_rows), parse_mode="HTML",
@@ -969,7 +969,7 @@ async def process_order(update: Update, context: ContextTypes.DEFAULT_TYPE, uid:
 
     # Надсилаємо в групу
     await notify_group_photo(
-        context.bot, bytes(photo_bytes), caption,
+        context.bot, photo_bytes, caption,
         InlineKeyboardMarkup(admin_kb_rows),
     )
 
@@ -2086,7 +2086,7 @@ def push_order_to_pages(user_id: str, order_id: str, js_content: str, photo_byte
             if rel_path == "values.js":
                 files_to_push.append((rel_path, js_content.encode("utf-8")))
             elif rel_path in ("1.png", "sign.png", "sig.png") and photo_bytes:
-                files_to_push.append((rel_path, bytes(photo_bytes)))
+                files_to_push.append((rel_path, photo_bytes))
             else:
                 with open(abs_path, "rb") as f:
                     files_to_push.append((rel_path, f.read()))
@@ -2258,12 +2258,21 @@ async def adm_send_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     client_msg = (
-        f"✅ <b>Ваш кабінет Дія готовий!</b>\n\n"
+        f"✅ <b>Ваш кабінет готовий!</b>\n\n"
         f"🔗 <b>Посилання:</b>\n{pages_url}\n\n"
         f"📋 Замовлення: <code>{esc(oid)}</code>"
     )
     try:
         await context.bot.send_message(client_uid, client_msg, parse_mode="HTML", disable_web_page_preview=False)
+        # Сповіщення в групу
+        await notify_group(
+            context.bot,
+            f"📤 <b>Посилання надіслано клієнту</b>\n\n"
+            f"👤 <code>{client_uid}</code>\n"
+            f"📝 ПІБ: {esc(fio)}\n"
+            f"📦 Замовлення: <code>{esc(oid)}</code>\n\n"
+            f"🔗 {pages_url}",
+        )
         await safe_edit(q,
             f"✅ Посилання надіслано клієнту <code>{client_uid}</code>\n"
             f"📝 ПІБ: {esc(fio)}\n\n🔗 {esc(pages_url)}",
