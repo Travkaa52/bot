@@ -1,11 +1,14 @@
 """
-FunsDiia Bot — повна переробка
-──────────────────────────────
-• GH токен береться ТІЛЬКИ з env (PAGES_GH_TOKEN) — не з чату адміна
+FunsDiia Bot — AI-автоматизація (DeepSeek V3)
+──────────────────────────────────────────────
+• GH токен ТІЛЬКИ з env (PAGES_GH_TOKEN) — не з коду
 • Підтвердження деплою + чеки → ГРУПА (GROUP_CHAT_ID)
 • Адмін-панель → особистий чат з ботом
-• Кнопка «Надіслати посилання» одним натисканням у групі
-• Безпека: rate-limit, HTML-escape, безпечне збереження файлів
+• DeepSeek V3 аналізує чеки автоматично
+• DeepSeek V3 відповідає на питання користувачів (підтримка)
+• Авто-деплой після підтвердженого чека
+• Адмін тільки підтверджує сумнівні чеки (1 кнопка)
+• Безпека: rate-limit, HTML-escape, безпечне збереження
 """
 
 import os, json, logging, io, random, re, pytz, time, hashlib, asyncio, base64
@@ -44,6 +47,12 @@ GROUP_CHAT_ID: Optional[int] = int(_raw_group) if _raw_group.lstrip("-").isdigit
 
 # GitHub токен ТІЛЬКИ з env/GitHub Secrets — ніколи не з чату і не з коду
 PAGES_GH_TOKEN: str = os.getenv("PAGES_GH_TOKEN", "")
+
+# DeepSeek API (V3 / "deepseek-chat" = V3, безкоштовний tier є)
+DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
+DEEPSEEK_MODEL   = "deepseek-chat"          # DeepSeek-V3
+DEEPSEEK_URL     = "https://api.deepseek.com/chat/completions"
+AI_ENABLED       = bool(DEEPSEEK_API_KEY)   # вимикається якщо ключ не задано
 
 TIMEZONE        = pytz.timezone("Europe/Kyiv")
 BOT_USERNAME    = os.getenv("BOT_USERNAME", "FunsDiia_bot")
@@ -91,6 +100,9 @@ DEFAULT_SETTINGS = {
     "welcome_text":      "",
     "maintenance_mode":  False,
     "new_orders_enabled":True,
+    "ai_check_receipts": True,   # DeepSeek аналізує чеки
+    "ai_auto_deploy":    True,   # авто-деплой після підтвердженого чека
+    "ai_support":        True,   # відповідає на питання користувачів
 }
 
 logging.basicConfig(
@@ -98,6 +110,116 @@ logging.basicConfig(
     level=getattr(logging, os.getenv("LOG_LEVEL", "INFO")),
 )
 logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────
+#  DEEPSEEK AI — МОДУЛЬ
+# ─────────────────────────────────────────
+_AI_SYSTEM_SUPPORT = """Ти — чат-підтримка сервісу FunsDiia. 
+Сервіс генерує персональні кабінети у стилі Дія (демонстраційні, навчальні цілі).
+Відповідай коротко, дружньо, українською мовою. 
+Якщо питання про оплату — скажи що реквізити надає адміністратор після підтвердження замовлення.
+Якщо питання поза темою — ввічливо поверни до теми сервісу.
+НЕ обіцяй того чого не можеш зробити. НЕ давай особисті поради."""
+
+_AI_SYSTEM_RECEIPT = """Ти — верифікатор платіжних чеків для сервісу FunsDiia.
+Проаналізуй зображення чека/скріншота оплати.
+Дай відповідь ТІЛЬКИ у форматі JSON без зайвого тексту:
+{"ok": true/false, "confidence": 0-100, "amount": число_або_null, "reason": "короткий опис"}
+
+ok=true якщо це схоже на реальний банківський переказ/чек.
+ok=false якщо: не схоже на чек, порожнє фото, скріншот чогось іншого.
+confidence — впевненість у відсотках.
+amount — сума переказу якщо видно, або null.
+reason — 1-2 речення пояснення."""
+
+
+def _deepseek_request(messages: list, system: str = "", max_tokens: int = 500) -> str:
+    """Синхронний запит до DeepSeek API."""
+    if not DEEPSEEK_API_KEY:
+        return ""
+    payload = {
+        "model": DEEPSEEK_MODEL,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "system", "content": system}] + messages if system else messages,
+        "temperature": 0.3,
+    }
+    try:
+        resp = _requests_lib.post(
+            DEEPSEEK_URL,
+            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        logger.error("DeepSeek API error: %s", e)
+        return ""
+
+
+async def ai_check_receipt(photo_bytes: bytes, expected_amount: int) -> dict:
+    """
+    Перевіряє фото чека через DeepSeek Vision.
+    Повертає dict: {ok, confidence, amount, reason, auto_approved}
+    """
+    if not AI_ENABLED or not photo_bytes:
+        return {"ok": None, "confidence": 0, "amount": None, "reason": "AI вимкнено", "auto_approved": False}
+
+    b64 = base64.b64encode(photo_bytes).decode()
+    messages = [{
+        "role": "user",
+        "content": [
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+            },
+            {
+                "type": "text",
+                "text": f"Очікувана сума оплати: {expected_amount}₴. Проаналізуй цей чек.",
+            },
+        ],
+    }]
+
+    raw = await asyncio.get_event_loop().run_in_executor(
+        None, lambda: _deepseek_request(messages, _AI_SYSTEM_RECEIPT, 300)
+    )
+
+    result = {"ok": None, "confidence": 0, "amount": None, "reason": raw or "Немає відповіді", "auto_approved": False}
+    try:
+        # Парсимо JSON з відповіді
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        if m:
+            parsed = json.loads(m.group())
+            result.update(parsed)
+            # Авто-підтвердження якщо впевненість >= 80%
+            result["auto_approved"] = bool(parsed.get("ok")) and int(parsed.get("confidence", 0)) >= 80
+    except Exception as e:
+        logger.warning("Receipt JSON parse error: %s | raw=%s", e, raw[:200])
+
+    return result
+
+
+async def ai_support_reply(user_message: str, user_history: list = None) -> str:
+    """Відповідь підтримки через DeepSeek."""
+    if not AI_ENABLED:
+        return ""
+    messages = (user_history or []) + [{"role": "user", "content": user_message}]
+    return await asyncio.get_event_loop().run_in_executor(
+        None, lambda: _deepseek_request(messages, _AI_SYSTEM_SUPPORT, 400)
+    )
+
+
+async def ai_generate_fio_en(fio_ua: str) -> str:
+    """Транслітерація ПІБ українською → латиницею через DeepSeek."""
+    if not AI_ENABLED or not fio_ua:
+        return fio_ua
+    messages = [{"role": "user", "content":
+        f"Транслітеруй українське ПІБ латиницею (стандарт КМУ 2010): '{fio_ua}'. "
+        f"Відповідь ТІЛЬКИ транслітерація, нічого більше."}]
+    result = await asyncio.get_event_loop().run_in_executor(
+        None, lambda: _deepseek_request(messages, "", 50)
+    )
+    return result.strip('"\'').strip() or fio_ua
 
 # ─────────────────────────────────────────
 #  DB УТИЛІТИ
@@ -847,7 +969,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_admin_state(update, context, state, text, uid)
         return
 
-    # Пересилаємо адміну
+    # ── AI підтримка (відповідає на питання юзерів) ──
+    settings = load_settings()
+    if AI_ENABLED and settings.get("ai_support", True) and text and not state:
+        # Зберігаємо короткий history (максимум 4 повідомлення)
+        history = context.user_data.get("ai_history", [])
+        reply = await ai_support_reply(text, history[-8:])  # last 4 pairs
+        if reply:
+            history.append({"role": "user", "content": text})
+            history.append({"role": "assistant", "content": reply})
+            context.user_data["ai_history"] = history[-16:]  # тримаємо 8 пар
+            await update.message.reply_text(
+                f"🤖 {reply}\n\n<i>Для оформлення замовлення натисніть /start</i>",
+                parse_mode="HTML",
+            )
+            return
+
+    # Fallback — пересилаємо адміну
     try:
         fwd = await update.message.forward(ADMIN_IDS[0])
         await context.bot.send_message(
@@ -861,6 +999,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✉️ <b>Повідомлення передано адміністратору.</b>", parse_mode="HTML")
     except Exception as e:
         logger.error("Forward error: %s", e)
+
 
 # ─────────────────────────────────────────
 #  ОБРОБКА МЕДІА (фото / чек)
@@ -887,6 +1026,12 @@ async def process_order(update: Update, context: ContextTypes.DEFAULT_TYPE, uid:
     photo_path = os.path.join(ORDER_PHOTOS_DIR, f"{oid}.png")
     with open(photo_path, "wb") as f:
         f.write(photo_bytes)
+
+    # AI транслітерація ПІБ (якщо ввімкнено)
+    fio_ua = context.user_data.get("fio", "")
+    if AI_ENABLED and fio_ua and not context.user_data.get("fio_en"):
+        fio_en = await ai_generate_fio_en(fio_ua)
+        context.user_data["fio_en"] = fio_en
 
     values_data = gen_values_dict({**context.user_data, "order_id": oid})
     js_content  = values_dict_to_js(values_data)
@@ -986,64 +1131,243 @@ async def process_order(update: Update, context: ContextTypes.DEFAULT_TYPE, uid:
     context.user_data.clear()
 
 async def forward_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, uid: str):
-    """Юзер надіслав чек — пересилаємо адміну і в групу з кнопкою «Надіслати посилання»."""
+    """
+    Юзер надіслав чек.
+    1. DeepSeek V3 аналізує фото чека
+    2. Якщо впевненість >= 80% → авто-деплой, юзер отримує посилання
+    3. Якщо < 80% → адмін отримує чек з кнопкою підтвердження (1 натискання)
+    """
+    settings = load_settings()
     first_name = esc(update.effective_user.first_name)
     username   = esc(update.effective_user.username or "")
-    info_text  = (
-        f"📑 <b>Чек від клієнта</b>\n"
-        f"👤 {first_name} (@{username})\n"
-        f"🆔 {uid}\n📅 {now_fmt()}\n\n"
-        "<i>Reply → відповісти клієнту</i>"
-    )
 
-    # Шукаємо останнє активне замовлення юзера щоб підставити кнопку
+    # Шукаємо останнє активне замовлення
     orders = safe_load(ORDERS_FILE)
     user_orders = sorted(
         [(oid, o) for oid, o in orders.items()
          if o.get("user_id") == uid and o.get("status") in ("pending", "approved")],
         key=lambda x: x[1].get("created_at", ""), reverse=True,
     )
-    send_link_btn = None
-    if user_orders:
-        last_oid, last_order = user_orders[0]
-        if last_order.get("pages_url"):
-            send_link_btn = InlineKeyboardButton(
-                "🔗 Надіслати посилання клієнту",
-                callback_data=f"adm_send_link:{uid}:{last_oid}",
-            )
-        elif PAGES_GH_TOKEN:
-            send_link_btn = InlineKeyboardButton(
-                "🚀 Деплой і надіслати",
-                callback_data=f"adm_push_pages:{uid}:{last_oid}",
-            )
 
-    receipt_kb = InlineKeyboardMarkup([[send_link_btn]]) if send_link_btn else None
-
-    try:
-        # В особистий чат адміна
-        fwd = await update.message.forward(ADMIN_IDS[0])
-        await context.bot.send_message(
-            ADMIN_IDS[0], info_text,
-            reply_to_message_id=fwd.message_id,
-            reply_markup=receipt_kb,
+    if not user_orders:
+        await update.message.reply_text(
+            "⚠️ <b>Активне замовлення не знайдено.</b>\n\nСпочатку оформіть замовлення через /start",
             parse_mode="HTML",
         )
-    except Exception as e:
-        logger.error("receipt fwd (admin): %s", e)
+        return
 
-    # В групу — чек + кнопка надіслати посилання одним натисканням
-    if GROUP_CHAT_ID:
+    last_oid, last_order = user_orders[0]
+    expected_price = last_order.get("final_price", 0)
+
+    # ── Повідомлення юзеру поки AI аналізує ──
+    await update.message.reply_text(
+        "✅ <b>Чек отримано!</b>\n\n🤖 Перевіряємо оплату автоматично...",
+        parse_mode="HTML",
+    )
+
+    # ── Завантажуємо фото чека ──
+    receipt_bytes = b""
+    if update.message.photo:
+        f = await update.message.photo[-1].get_file()
+        receipt_bytes = bytes(await f.download_as_bytearray())
+    elif update.message.document and update.message.document.mime_type and \
+         update.message.document.mime_type.startswith("image/"):
+        f = await update.message.document.get_file()
+        receipt_bytes = bytes(await f.download_as_bytearray())
+
+    # ── AI перевірка ──
+    ai_result = {"ok": None, "confidence": 0, "amount": None, "reason": "", "auto_approved": False}
+    if AI_ENABLED and settings.get("ai_check_receipts", True) and receipt_bytes:
+        ai_result = await ai_check_receipt(receipt_bytes, expected_price)
+        logger.info("AI receipt check uid=%s oid=%s: %s", uid, last_oid, ai_result)
+
+    auto_ok   = ai_result.get("auto_approved", False) and settings.get("ai_auto_deploy", True) and bool(PAGES_GH_TOKEN)
+    confidence = ai_result.get("confidence", 0)
+    ai_amount  = ai_result.get("amount")
+    ai_reason  = ai_result.get("reason", "")
+
+    ai_badge = (
+        f"🤖 <b>AI-аналіз чека:</b>\n"
+        f"{'✅ Схоже на чек' if ai_result.get('ok') else '⚠️ Сумнівний чек'} | "
+        f"Впевненість: <b>{confidence}%</b>\n"
+        f"{'💰 Сума: ' + str(ai_amount) + '₴' if ai_amount else ''}\n"
+        f"<i>{ai_reason}</i>\n\n"
+    )
+
+    info_text = (
+        f"📑 <b>Чек від клієнта</b>\n"
+        f"👤 {first_name} (@{username})\n"
+        f"🆔 {uid}\n"
+        f"📦 Замовлення: <code>{esc(last_oid)}</code>\n"
+        f"💰 Очікувана сума: {expected_price}₴\n"
+        f"📅 {now_fmt()}\n\n"
+        f"{ai_badge if AI_ENABLED else ''}"
+        f"<i>Reply → відповісти клієнту</i>"
+    )
+
+    # ══════════════════════════════════════
+    #  АВТО-ДЕПЛОЙ (AI впевнений >= 80%)
+    # ══════════════════════════════════════
+    if auto_ok:
+        log_action("ai_receipt_approved", uid, {"oid": last_oid, "confidence": confidence})
+
+        await update.message.reply_text(
+            f"🎉 <b>Оплату підтверджено автоматично!</b>\n\n"
+            f"🤖 AI перевірив чек ({confidence}% впевненість)\n"
+            f"⏳ Готуємо ваш кабінет, зачекайте...",
+            parse_mode="HTML",
+        )
+
+        # Оновлюємо статус
+        orders[last_oid]["status"] = "approved"
+        orders[last_oid]["receipt_ai"] = ai_result
+        safe_save(ORDERS_FILE, orders)
+
+        # Отримуємо дані для деплою
+        js_content = last_order.get("js_content", "")
+        if not js_content:
+            vd = gen_values_dict({
+                "fio": last_order.get("fio",""), "dob": last_order.get("dob",""),
+                "sex": last_order.get("sex","M"), "is_rights": last_order.get("is_rights",True),
+                "is_zagran": last_order.get("is_zagran",True), "is_diploma": last_order.get("is_diploma",False),
+                "is_study": last_order.get("is_study",False), "address": last_order.get("address",""),
+                "order_id": last_oid,
+            })
+            js_content = values_dict_to_js(vd)
+
+        photo_bytes = b""
+        photo_path = last_order.get("photo_path","")
+        if photo_path and os.path.exists(photo_path):
+            with open(photo_path,"rb") as f:
+                photo_bytes = f.read()
+
         try:
-            await update.message.copy_to(GROUP_CHAT_ID)
-            await context.bot.send_message(
-                GROUP_CHAT_ID, info_text,
-                reply_markup=receipt_kb,
+            pages_url = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: push_order_to_pages(uid, last_oid, js_content, photo_bytes),
+            )
+            orders = safe_load(ORDERS_FILE)
+            orders[last_oid]["pages_url"]   = pages_url
+            orders[last_oid]["status"]      = "deployed"
+            orders[last_oid]["deployed_at"] = now_str()
+            safe_save(ORDERS_FILE, orders)
+            log_action("pages_deployed_auto", uid, {"oid": last_oid, "url": pages_url})
+
+            # Юзеру — посилання
+            await update.message.reply_text(
+                f"✅ <b>Ваш кабінет готовий!</b>\n\n"
+                f"🔗 <b>Посилання:</b>\n{pages_url}\n\n"
+                f"⏱ Якщо сайт ще не відкривається — зачекайте 1-2 хвилини.\n"
+                f"📋 Замовлення: <code>{esc(last_oid)}</code>",
+                parse_mode="HTML",
+                disable_web_page_preview=False,
+            )
+
+            # В групу — авто-звіт
+            repo_name = build_repo_name(uid, last_oid)
+            await notify_group(
+                context.bot,
+                f"🤖 <b>АВТО-ДЕПЛОЙ завершено!</b>\n\n"
+                f"👤 {first_name} (@{username}) | <code>{uid}</code>\n"
+                f"📦 Замовлення: <code>{esc(last_oid)}</code>\n"
+                f"💰 Сума: {expected_price}₴\n"
+                f"🤖 AI впевненість: {confidence}%\n"
+                f"📁 Репо: <code>{esc(repo_name)}</code>\n\n"
+                f"🔗 {pages_url}\n\n"
+                f"✅ Посилання надіслано клієнту автоматично.",
+                mkb([InlineKeyboardButton("🔗 Надіслати ще раз", callback_data=f"adm_send_link:{uid}:{last_oid}")]),
+            )
+
+            # Адмінам — інфо
+            for admin_id in ADMIN_IDS:
+                try:
+                    await context.bot.send_message(
+                        admin_id,
+                        f"🤖 <b>Авто-деплой</b> #{esc(last_oid)}\n"
+                        f"👤 {first_name} | AI: {confidence}%\n🔗 {pages_url}",
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+            return
+
+        except Exception as e:
+            logger.error("Auto-deploy error: %s", e, exc_info=True)
+            # Якщо деплой не вдався — fallback до ручного
+            await update.message.reply_text(
+                "⚠️ Оплату підтверджено, але виникла технічна помилка при деплої.\n"
+                "Адміністратор виправить вручну.",
                 parse_mode="HTML",
             )
+
+    # ══════════════════════════════════════
+    #  РУЧНЕ ПІДТВЕРДЖЕННЯ (AI не впевнений або AI вимкнено)
+    # ══════════════════════════════════════
+    kb_rows = []
+    if PAGES_GH_TOKEN:
+        kb_rows.append([InlineKeyboardButton(
+            "✅ Підтвердити і задеплоїти",
+            callback_data=f"adm_approve_deploy:{uid}:{last_oid}",
+        )])
+    kb_rows.append([InlineKeyboardButton(
+        "✅ Підтвердити (без деплою)",
+        callback_data=f"adm_approve:{uid}:{last_oid}",
+    )])
+    kb_rows.append([InlineKeyboardButton(
+        "❌ Відхилити чек",
+        callback_data=f"adm_reject:{uid}:{last_oid}",
+    )])
+    if last_order.get("pages_url"):
+        kb_rows.append([InlineKeyboardButton(
+            "🔗 Надіслати посилання",
+            callback_data=f"adm_send_link:{uid}:{last_oid}",
+        )])
+
+    receipt_kb = InlineKeyboardMarkup(kb_rows)
+
+    # Надсилаємо адмінам
+    for admin_id in ADMIN_IDS:
+        try:
+            if receipt_bytes:
+                p_io = io.BytesIO(receipt_bytes); p_io.name = "receipt.jpg"
+                await context.bot.send_photo(
+                    admin_id, p_io, caption=info_text,
+                    reply_markup=receipt_kb, parse_mode="HTML",
+                )
+            else:
+                fwd = await update.message.forward(admin_id)
+                await context.bot.send_message(
+                    admin_id, info_text,
+                    reply_to_message_id=fwd.message_id,
+                    reply_markup=receipt_kb, parse_mode="HTML",
+                )
+        except Exception as e:
+            logger.error("receipt fwd (admin %s): %s", admin_id, e)
+
+    # В групу
+    if GROUP_CHAT_ID:
+        try:
+            if receipt_bytes:
+                p_io = io.BytesIO(receipt_bytes); p_io.name = "receipt.jpg"
+                await context.bot.send_photo(
+                    GROUP_CHAT_ID, p_io, caption=info_text,
+                    reply_markup=receipt_kb, parse_mode="HTML",
+                )
+            else:
+                await update.message.copy_to(GROUP_CHAT_ID)
+                await context.bot.send_message(
+                    GROUP_CHAT_ID, info_text,
+                    reply_markup=receipt_kb, parse_mode="HTML",
+                )
         except Exception as e:
             logger.error("receipt fwd (group): %s", e)
 
-    await update.message.reply_text("✅ <b>Чек отримано!</b>\n\nПеревіряємо оплату, очікуйте. 🌸", parse_mode="HTML")
+    if not auto_ok and AI_ENABLED and ai_result.get("ok") is not None:
+        reason_txt = f"\n\n⚠️ AI не зміг авто-підтвердити ({confidence}%). Перевірте вручну." if confidence < 80 else ""
+        await update.message.reply_text(
+            f"✅ <b>Чек отримано!</b>{reason_txt}\n\nАдміністратор перевірить найближчим часом. 🌸",
+            parse_mode="HTML",
+        )
 
 async def handle_referral_bonus(context, uid: str):
     users = safe_load(USERS_FILE)
@@ -1510,6 +1834,107 @@ async def adm_order_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await adm_orders(update, context)
 
 @admin_check
+@admin_check
+async def adm_approve_deploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Адмін вручну підтверджує чек І одразу деплоїть (1 кнопка)."""
+    q = update.callback_query
+    parts = q.data.split(":")
+    client_uid, oid = parts[1], parts[2]
+    await safe_edit(q, "⏳ <b>Підтверджуємо оплату і деплоємо...</b>")
+
+    orders = safe_load(ORDERS_FILE)
+    order = orders.get(oid, {})
+    if not order:
+        await safe_edit(q, "❌ Замовлення не знайдено.")
+        return
+
+    # Підтверджуємо
+    orders[oid]["status"] = "approved"
+    safe_save(ORDERS_FILE, orders)
+    log_action("receipt_manually_approved", q.from_user.id, {"oid": oid, "client": client_uid})
+
+    # Повідомляємо клієнта
+    try:
+        await context.bot.send_message(
+            client_uid,
+            f"✅ <b>Оплату підтверджено!</b>\n\n⏳ Готуємо ваш кабінет...\n📋 Замовлення: <code>{esc(oid)}</code>",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error("Client notify error: %s", e)
+
+    # Деплой
+    js_content = order.get("js_content","")
+    if not js_content:
+        vd = gen_values_dict({
+            "fio": order.get("fio",""), "dob": order.get("dob",""),
+            "sex": order.get("sex","M"), "is_rights": order.get("is_rights",True),
+            "is_zagran": order.get("is_zagran",True), "is_diploma": order.get("is_diploma",False),
+            "is_study": order.get("is_study",False), "address": order.get("address",""),
+            "order_id": oid,
+        })
+        js_content = values_dict_to_js(vd)
+
+    photo_bytes = b""
+    photo_path = order.get("photo_path","")
+    if photo_path and os.path.exists(photo_path):
+        with open(photo_path,"rb") as f:
+            photo_bytes = f.read()
+
+    try:
+        pages_url = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: push_order_to_pages(client_uid, oid, js_content, photo_bytes),
+        )
+        orders = safe_load(ORDERS_FILE)
+        orders[oid]["pages_url"]   = pages_url
+        orders[oid]["status"]      = "deployed"
+        orders[oid]["deployed_at"] = now_str()
+        safe_save(ORDERS_FILE, orders)
+        log_action("pages_deployed", q.from_user.id, {"oid": oid, "url": pages_url})
+
+        repo_name = build_repo_name(client_uid, oid)
+
+        # Клієнту посилання
+        try:
+            await context.bot.send_message(
+                client_uid,
+                f"✅ <b>Ваш кабінет готовий!</b>\n\n🔗 <b>Посилання:</b>\n{pages_url}\n\n"
+                f"⏱ Якщо сайт ще не відкривається — зачекайте 1-2 хвилини.\n"
+                f"📋 Замовлення: <code>{esc(oid)}</code>",
+                parse_mode="HTML", disable_web_page_preview=False,
+            )
+        except Exception as e:
+            logger.error("Client notify error: %s", e)
+
+        # В групу
+        await notify_group(
+            context.bot,
+            f"🚀 <b>Деплой завершено (вручну підтверджено)</b>\n\n"
+            f"📦 <code>{esc(oid)}</code> | 👤 <code>{client_uid}</code>\n"
+            f"📁 Репо: <code>{esc(repo_name)}</code>\n🔗 {pages_url}",
+            mkb([InlineKeyboardButton("🔗 Надіслати ще раз", callback_data=f"adm_send_link:{client_uid}:{oid}")]),
+        )
+
+        await safe_edit(q,
+            f"✅ <b>Підтверджено і задеплоєно!</b>\n\n"
+            f"📦 <code>{esc(oid)}</code>\n🔗 {esc(pages_url)}\n"
+            f"📤 Посилання надіслано клієнту.",
+            mkb(
+                [InlineKeyboardButton("🔗 Надіслати ще раз", callback_data=f"adm_send_link:{client_uid}:{oid}")],
+                back_btn("admin_panel"),
+            ),
+        )
+    except Exception as e:
+        logger.error("adm_approve_deploy error: %s", e, exc_info=True)
+        await safe_edit(q,
+            f"⚠️ Оплату підтверджено, але деплой не вдався:\n<code>{esc(str(e)[:300])}</code>",
+            mkb(
+                [InlineKeyboardButton("🔄 Спробувати деплой знову", callback_data=f"adm_push_pages:{client_uid}:{oid}")],
+                back_btn("admin_panel"),
+            ),
+        )
+
+
 async def adm_approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     parts = q.data.split(":")
@@ -1918,10 +2343,15 @@ async def reply_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def adm_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     s = load_settings()
+    ai_status = "✅ Встановлено" if AI_ENABLED else "❌ Не задано (DEEPSEEK_API_KEY у secrets)"
     text = (
         f"⚙️ <b>Налаштування бота</b>\n\n"
         f"🛠 Тех. обслуговування: {'🔴 Так' if s.get('maintenance_mode') else '🟢 Ні'}\n"
         f"📦 Нові замовлення: {'✅' if s.get('new_orders_enabled') else '❌'}\n\n"
+        f"🤖 <b>AI (DeepSeek V3):</b> {ai_status}\n"
+        f"  └ Авто-перевірка чеків: {'✅' if s.get('ai_check_receipts',True) else '❌'}\n"
+        f"  └ Авто-деплой: {'✅' if s.get('ai_auto_deploy',True) else '❌'}\n"
+        f"  └ AI підтримка: {'✅' if s.get('ai_support',True) else '❌'}\n\n"
         f"💳 <b>Реквізити:</b>\n{esc(s.get('payment_card','—'))}\n{esc(s.get('payment_holder','—'))}\n"
         f"🔗 {esc(s.get('payment_link','—'))}\n\n"
         f"💬 Група: {'✅ ' + str(GROUP_CHAT_ID) if GROUP_CHAT_ID else '❌ Не задано (GROUP_CHAT_ID у secrets)'}\n"
@@ -1930,6 +2360,12 @@ async def adm_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = mkb(
         [InlineKeyboardButton("🛠 Тех. обслуговування", callback_data="toggle_maintenance"),
          InlineKeyboardButton("📦 Нові замовлення",     callback_data="toggle_orders")],
+        [InlineKeyboardButton("🤖 AI чеки: " + ("✅" if s.get("ai_check_receipts",True) else "❌"),
+                              callback_data="toggle_ai_receipts"),
+         InlineKeyboardButton("🚀 Авто-деплой: " + ("✅" if s.get("ai_auto_deploy",True) else "❌"),
+                              callback_data="toggle_ai_deploy")],
+        [InlineKeyboardButton("💬 AI підтримка: " + ("✅" if s.get("ai_support",True) else "❌"),
+                              callback_data="toggle_ai_support")],
         [InlineKeyboardButton("💳 Змінити реквізити",   callback_data="edit_payment")],
         [InlineKeyboardButton("📝 Текст привітання",    callback_data="edit_welcome")],
         back_btn("admin_panel"),
@@ -1946,6 +2382,24 @@ async def toggle_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def toggle_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     s = load_settings(); s["new_orders_enabled"] = not s.get("new_orders_enabled", True); save_settings(s)
+    await adm_settings(update, context)
+
+@admin_check
+async def toggle_ai_receipts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    s = load_settings(); s["ai_check_receipts"] = not s.get("ai_check_receipts", True); save_settings(s)
+    await adm_settings(update, context)
+
+@admin_check
+async def toggle_ai_deploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    s = load_settings(); s["ai_auto_deploy"] = not s.get("ai_auto_deploy", True); save_settings(s)
+    await adm_settings(update, context)
+
+@admin_check
+async def toggle_ai_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    s = load_settings(); s["ai_support"] = not s.get("ai_support", True); save_settings(s)
     await adm_settings(update, context)
 
 @admin_check
@@ -2326,6 +2780,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "toggle_orders":     toggle_orders,
             "edit_payment":      edit_payment,
             "edit_welcome":      edit_welcome,
+            "toggle_ai_receipts":toggle_ai_receipts,
+            "toggle_ai_deploy":  toggle_ai_deploy,
+            "toggle_ai_support": toggle_ai_support,
         }
         if d in routes:
             return await routes[d](update, context)
@@ -2337,6 +2794,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if d.startswith("zagran:"):           return await select_zagran(update, context)
         if d.startswith("diploma:"):          return await select_diploma(update, context)
         if d.startswith("adm_approve:"):      return await adm_approve(update, context)
+        if d.startswith("adm_approve_deploy:"): return await adm_approve_deploy(update, context)
         if d.startswith("adm_reject:"):       return await adm_reject(update, context)
         if d.startswith("adm_complete:"):     return await adm_complete(update, context)
         if d.startswith("adm_push_pages:"):   return await adm_push_pages(update, context)
