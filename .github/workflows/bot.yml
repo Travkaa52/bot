@@ -5,10 +5,10 @@ on:
     branches: [main, master]
   workflow_dispatch:
   schedule:
-    # Запуск каждые 5 часов (300 минут)
+    # Запуск кожні 5 годин
     - cron: '0 */5 * * *'
 
-# Контроль параллельности: если запускается новый процесс, старый будет отменен (потушен)
+# Якщо запускається новий процес — старий зупиняється
 concurrency:
   group: bot-worker
   cancel-in-progress: true
@@ -43,6 +43,7 @@ jobs:
             action_logs.json
             banned_users.json
             bot_settings.json
+            order_photos/
           key: bot-data-${{ github.run_id }}
           restore-keys: |
             bot-data-
@@ -51,11 +52,17 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
+          GROUP_CHAT_ID: ${{ secrets.GROUP_CHAT_ID }}
           BOT_USERNAME: ${{ secrets.BOT_USERNAME }}
+          # GitHub Personal Access Token для деплою GitHub Pages
+          PAGES_GH_TOKEN: ${{ secrets.PAGES_GH_TOKEN }}
+          # DeepSeek API ключ для AI-автоматизації
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          REFERRAL_REWARD: ${{ secrets.REFERRAL_REWARD }}
+          MIN_WITHDRAW: ${{ secrets.MIN_WITHDRAW }}
           GITHUB_ACTIONS: "true"
           LOG_LEVEL: INFO
-        # Ограничиваем время работы скрипта 295 минутами (чуть меньше 5 часов).
-        # Скрипт завершится сам, чтобы успеть сохранить кэш до того, как его убьет новый процесс.
+        # Зупиняємо через 295 хв, щоб встигнути зберегти кеш
         run: timeout 295m python bot.py || true
 
       - name: 💾 Save data files
@@ -71,4 +78,5 @@ jobs:
             action_logs.json
             banned_users.json
             bot_settings.json
+            order_photos/
           key: bot-data-${{ github.run_id }}
