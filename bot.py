@@ -49,18 +49,21 @@ if not ADMIN_IDS:
 
 # ID групи
 _raw_group = os.getenv("GROUP_CHAT_ID", "").strip()
-GROUP_CHAT_ID: Optional[int] = int(_raw_group) if _raw_group.lstrip("-").isdigit() else None 
+GROUP_CHAT_ID: Optional[int] = int(_raw_group) if _raw_group.lstrip("-").isdigit() else None
 
-# DeepSeek API (V3 / "deepseek-chat" = V3, безкоштовний tier є)
+# GitHub та DeepSeek конфіг
+PAGES_GH_TOKEN: str = os.getenv("PAGES_GH_TOKEN", "")
 DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
-DEEPSEEK_MODEL   = "deepseek-chat"          # DeepSeek-V3
+DEEPSEEK_MODEL   = "deepseek-chat"
 DEEPSEEK_URL     = "https://api.deepseek.com/chat/completions"
-AI_ENABLED       = bool(DEEPSEEK_API_KEY)   # вимикається якщо ключ не задано
+AI_ENABLED       = bool(DEEPSEEK_API_KEY)
 
 TIMEZONE        = pytz.timezone("Europe/Kyiv")
 BOT_USERNAME    = os.getenv("BOT_USERNAME", "FunsDiia_bot")
-REFERRAL_REWARD = int(os.getenv("REFERRAL_REWARD", "19"))
-MIN_WITHDRAW    = int(os.getenv("MIN_WITHDRAW", "50"))
+
+# Використовуємо безпечне отримання чисел
+REFERRAL_REWARD = _get_env_int("REFERRAL_REWARD", 19)
+MIN_WITHDRAW    = _get_env_int("MIN_WITHDRAW", 50)
 
 # Файли БД
 USERS_FILE         = "users_data.json"
