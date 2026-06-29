@@ -62,6 +62,7 @@ jobs:
           MIN_WITHDRAW: ${{ secrets.MIN_WITHDRAW }}
           GITHUB_ACTIONS: "true"
           LOG_LEVEL: INFO
+          SQLITECLOUD_URL: ${{ secrets.SQLITECLOUD_URL }} # <--- ДОДАЙТЕ Ц
         # Зупиняємо через 295 хв, щоб встигнути зберегти кеш
         run: timeout 295m python bot.py || true
 
