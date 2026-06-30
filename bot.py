@@ -1454,7 +1454,8 @@ async def adm_order_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid2 = o.get("user_id", "?")
     status_map = {"pending":"⏳","approved":"✅","completed":"🎉","rejected":"❌","deployed":"🌐"}
     st = status_map.get(o.get("status",""), o.get("status","?"))
-    pages_line = f"\n🔗 <a href='{esc(o[\"pages_url\"])}'>Відкрити кабінет</a>" if o.get("pages_url") else ""
+    url = esc(o.get("pages_url", ""))
+    pages_line = f"\n🔗 <a href='{url}'>Відкрити кабінет</a>" if url else ""
     text = (
         f"📋 <b>#{esc(oid)}</b>  {st}\n"
         f"👤 {esc(o.get('fio','?'))}  ·  ДН: {esc(o.get('dob','?'))}\n"
