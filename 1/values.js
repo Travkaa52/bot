@@ -66,8 +66,13 @@ var photo_rights   = "1.png"; //права
 var photo_students = "1.png"; //диплом, студ
 var photo_zagran   = "1.png"; //загран
 
-var signPng           = "sign.png"; //подпись
-// Можно добавить еще, если надо
+var signPng           = "sign.png"; //підпис
+
+// ── Підписка / Watermark ──────────────────
+// subscription_end — ISO дата закінчення підписки (порожнє = безстроково)
+// is_expired       — true = показувати watermark негайно (без перевірки дати)
+var subscription_end  = ""; // заповнюється автоматично при деплої
+var is_expired        = false;
 
 
 

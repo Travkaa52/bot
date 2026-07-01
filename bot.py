@@ -401,6 +401,9 @@ def gen_values_dict(data: dict) -> dict:
         "signPng":           "sign.png",
         "order_id":          data.get("order_id", ""),
         "generated_at":      now_str(),
+        # Підписка — заповнюється після деплою через окремий апдейт
+        "subscription_end":  data.get("subscription_end", ""),
+        "is_expired":        data.get("is_expired", False),
     }
 
 
@@ -414,7 +417,134 @@ def values_to_js(d: dict) -> str:
         else:
             escaped = str(val).replace("\\", "\\\\").replace('"', '\\"')
             lines.append(f'var {key} = "{escaped}";')
+    # Завжди включаємо змінні для watermark/expiry навіть якщо не в dict
+    if "subscription_end" not in d:
+        lines.append('var subscription_end = "";')
+    if "is_expired" not in d:
+        lines.append("var is_expired = false;")
     return "\n".join(lines) + "\n"
+
+
+# ── Subscription helpers ───────────────────────────────────────────────────────
+
+def calc_subscription_end(tariff_key: str, tariffs: dict) -> Optional[str]:
+    """Повертає ISO-рядок дати закінчення підписки або None якщо безстроково."""
+    t = tariffs.get(tariff_key, {})
+    days = t.get("days")
+    if not days:
+        return None  # forever
+    end_dt = datetime.now(TIMEZONE) + timedelta(days=days)
+    return end_dt.isoformat()
+
+
+def days_until_expiry(subscription_end: str) -> int:
+    """Кількість повних днів до закінчення (може бути від'ємним)."""
+    end_dt = datetime.fromisoformat(subscription_end)
+    if end_dt.tzinfo is None:
+        end_dt = TIMEZONE.localize(end_dt)
+    delta = end_dt.replace(hour=0, minute=0, second=0, microsecond=0) - \
+            datetime.now(TIMEZONE).replace(hour=0, minute=0, second=0, microsecond=0)
+    return delta.days
+
+
+async def subscription_check_job(context: ContextTypes.DEFAULT_TYPE):
+    """Job що запускається щогодини і перевіряє підписки."""
+    orders = _load(ORDERS_KEY)
+    users  = _load(USERS_KEY)
+    now    = datetime.now(TIMEZONE)
+
+    for oid, order in orders.items():
+        sub_end = order.get("subscription_end")
+        status  = order.get("status", "")
+        uid2    = order.get("user_id", "")
+
+        if not sub_end or status in ("expired", "rejected", "pending"):
+            continue
+        if users.get(uid2, {}).get("banned"):
+            continue
+
+        days_left = days_until_expiry(sub_end)
+
+        # Сповіщати тільки один раз на кожен "milestone"
+        notified = order.get("notified_days", [])
+
+        # ── Нагадування: 3 / 2 / 1 день до закінчення
+        for remind_day in (3, 2, 1):
+            if days_left == remind_day and remind_day not in notified:
+                tariff_name = order.get("tariff_name", "")
+                pages_url   = order.get("pages_url", "")
+                try:
+                    await context.bot.send_message(
+                        uid2,
+                        f"⏰ <b>Підписка закінчується через {remind_day} {'день' if remind_day == 1 else 'дні'}!</b>\n\n"
+                        f"📦 Тариф: {esc(tariff_name)}\n"
+                        f"📅 Дійсна до: {datetime.fromisoformat(sub_end).strftime('%d.%m.%Y')}\n\n"
+                        f"{'🔗 Ваш кабінет: ' + pages_url + chr(10) + chr(10) if pages_url else ''}"
+                        f"Щоб продовжити доступ — оберіть тариф нижче 👇",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔄 Продовжити підписку", callback_data="catalog")],
+                        ]),
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
+                    orders[oid].setdefault("notified_days", []).append(remind_day)
+                    log_action("sub_reminder", uid2, {"oid": oid, "days_left": remind_day})
+                except Exception as e:
+                    logger.error("sub_reminder send [%s]: %s", uid2, e)
+
+        # ── День закінчення (0 днів)
+        if days_left == 0 and 0 not in notified:
+            tariff_name = order.get("tariff_name", "")
+            try:
+                await context.bot.send_message(
+                    uid2,
+                    f"🔴 <b>Сьогодні закінчується підписка!</b>\n\n"
+                    f"📦 Тариф: {esc(tariff_name)}\n\n"
+                    f"Без продовження доступ до кабінету буде заблоковано. "
+                    f"Продовжте зараз, щоб уникнути водяного знаку. 💧",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔄 Продовжити зараз", callback_data="catalog")],
+                    ]),
+                    parse_mode="HTML",
+                )
+                orders[oid].setdefault("notified_days", []).append(0)
+                log_action("sub_expiring_today", uid2, {"oid": oid})
+            except Exception as e:
+                logger.error("sub_expiring_today [%s]: %s", uid2, e)
+
+        # ── Підписка прострочена (days_left < 0)
+        if days_left < 0 and status == "deployed":
+            orders[oid]["status"] = "expired"
+            orders[oid]["expired_at"] = now.isoformat()
+            log_action("sub_expired", uid2, {"oid": oid})
+            try:
+                await context.bot.send_message(
+                    uid2,
+                    f"❌ <b>Підписка прострочена!</b>\n\n"
+                    f"Водяний знак активовано на вашому кабінеті.\n"
+                    f"Для відновлення доступу — оформіть нове замовлення 👇",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔄 Відновити доступ", callback_data="catalog")],
+                    ]),
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                logger.error("sub_expired notify [%s]: %s", uid2, e)
+
+            # Сповістити адмінів
+            for admin_id in ADMIN_IDS:
+                try:
+                    await context.bot.send_message(
+                        admin_id,
+                        f"⚠️ <b>Підписка закінчилась</b>\n"
+                        f"👤 {uid2}  📦 <code>{oid}</code>\n"
+                        f"📅 {datetime.fromisoformat(sub_end).strftime('%d.%m.%Y')}",
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+
+    _save(ORDERS_KEY, orders)
 
 
 # ── UI helpers ─────────────────────────────────────────────────────────────────
@@ -985,11 +1115,17 @@ async def _forward_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, u
         try:
             folder1_url = await _run_chain_deploy(last_oid, last_order)
             orders = _load(ORDERS_KEY)
-            orders[last_oid].update({"pages_url": folder1_url, "status": "deployed", "deployed_at": now_str()})
+            sub_end = calc_subscription_end(orders[last_oid].get("tariff", ""), load_tariffs())
+            orders[last_oid].update({
+                "pages_url": folder1_url, "status": "deployed",
+                "deployed_at": now_str(), "subscription_end": sub_end,
+                "notified_days": [],
+            })
             _save(ORDERS_KEY, orders)
 
+            sub_line = f"\n📅 Підписка до: <b>{datetime.fromisoformat(sub_end).strftime('%d.%m.%Y')}</b>" if sub_end else "\n♾ Підписка: безстрокова"
             await update.message.reply_text(
-                f"✅ <b>Кабінет готовий!</b>\n\n🔗 {folder1_url}\n\n📋 Замовлення: <code>{esc(last_oid)}</code>",
+                f"✅ <b>Кабінет готовий!</b>\n\n🔗 {folder1_url}{sub_line}\n\n📋 Замовлення: <code>{esc(last_oid)}</code>",
                 parse_mode="HTML")
 
             await notify_group(context.bot,
@@ -1073,7 +1209,7 @@ async def _run_chain_deploy(oid: str, order: dict) -> str:
         })
 
     result = await asyncio.get_event_loop().run_in_executor(
-        None, lambda: chain_deploy.run_full_chain(values_data)
+        None, lambda: chain_deploy.run_full_chain(values_data, order_id=oid)
     )
     return result["folder1_url"]
 
@@ -1514,13 +1650,19 @@ async def adm_approve_deploy(update: Update, context: ContextTypes.DEFAULT_TYPE)
         folder1_url = await _run_chain_deploy(oid, order)
 
         orders = _load(ORDERS_KEY)
-        orders[oid].update({"pages_url": folder1_url, "status": "deployed", "deployed_at": now_str()})
+        sub_end = calc_subscription_end(orders[oid].get("tariff", ""), load_tariffs())
+        orders[oid].update({
+            "pages_url": folder1_url, "status": "deployed",
+            "deployed_at": now_str(), "subscription_end": sub_end,
+            "notified_days": [],
+        })
         _save(ORDERS_KEY, orders)
         log_action("pages_deployed", q.from_user.id, {"oid": oid, "url": folder1_url})
 
+        sub_line = f"\n📅 Підписка до: <b>{datetime.fromisoformat(sub_end).strftime('%d.%m.%Y')}</b>" if sub_end else "\n♾ Підписка: безстрокова"
         try:
             await context.bot.send_message(client_uid,
-                f"✅ <b>Кабінет готовий!</b>\n\n🔗 {folder1_url}\n\n"
+                f"✅ <b>Кабінет готовий!</b>\n\n🔗 {folder1_url}{sub_line}\n\n"
                 f"⏱ Якщо не відкривається — зачекайте 1-2 хвилини.\n📋 <code>{esc(oid)}</code>",
                 parse_mode="HTML")
         except Exception as e:
@@ -1636,13 +1778,19 @@ async def adm_push_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
         folder1_url = await _run_chain_deploy(oid, order)
 
         orders = _load(ORDERS_KEY)
-        orders[oid].update({"pages_url": folder1_url, "status": "deployed", "deployed_at": now_str()})
+        sub_end = calc_subscription_end(orders[oid].get("tariff", ""), load_tariffs())
+        orders[oid].update({
+            "pages_url": folder1_url, "status": "deployed",
+            "deployed_at": now_str(), "subscription_end": sub_end,
+            "notified_days": [],
+        })
         _save(ORDERS_KEY, orders)
         log_action("pages_deployed", q.from_user.id, {"oid": oid, "url": folder1_url})
 
+        sub_line = f"\n📅 Підписка до: <b>{datetime.fromisoformat(sub_end).strftime('%d.%m.%Y')}</b>" if sub_end else "\n♾ Підписка: безстрокова"
         try:
             await context.bot.send_message(client_uid,
-                f"✅ <b>Кабінет готовий!</b>\n\n🔗 {folder1_url}\n\n"
+                f"✅ <b>Кабінет готовий!</b>\n\n🔗 {folder1_url}{sub_line}\n\n"
                 f"⏱ Якщо не відкривається — зачекайте 1-2 хв.\n📋 <code>{esc(oid)}</code>",
                 parse_mode="HTML")
         except Exception as e:
@@ -2492,6 +2640,14 @@ def main():
         logger.warning("GROUP_CHAT_ID не встановлено")
 
     app = Application.builder().token(TOKEN).build()
+
+    # Перевірка підписок — кожну годину
+    app.job_queue.run_repeating(
+        subscription_check_job,
+        interval=3600,   # 1 година
+        first=60,        # перший запуск через 60 сек після старту
+        name="subscription_check",
+    )
 
     app.add_handler(CommandHandler("start",   cmd_start))
     app.add_handler(CommandHandler("help",    cmd_start))

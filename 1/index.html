@@ -74,6 +74,23 @@
         font-style: normal;
         font-display: swap;
     }
+    @font-face {
+        font-family: 'e-UkraineHead';
+        src: url('assets/e-UkraineHead-Medium.woff') format('woff');
+        font-weight: 500;
+        font-style: normal;
+        font-display: swap;
+    }
+
+    @font-face {
+        font-family: 'e-UkraineHead';
+        src: url('assets/e-UkraineHead-Bold.woff') format('woff');
+        font-weight: 700;
+        font-style: normal;
+        font-display: swap;
+    }
+
+
 
     /* Основний екран */
     .loadpage {
@@ -368,28 +385,239 @@
         bottom: 0;
         width: 100%;
         color: #fff;
-        background-color: black;
-        padding: 15px 20px;
+        background-color: #000;
+        padding: 10px 8px calc(10px + env(safe-area-inset-bottom, 0px));
         display: flex;
-        justify-content: space-between;
+        justify-content: space-around;
+        align-items: center;
+        gap: 0;
+        border-top: 1px solid rgba(255,255,255,0.08);
     }
 
-        .footer > div > span {
-            font-size: 12px;
+        .footer > div > span,
+        .footer > .nav-btn > span {
+            font-size: 10px;
+            letter-spacing: 0.01em;
         }
 
         .footer > div > img {
             filter: brightness(0) invert(1);
-            width: 25px;
-            height: 25px;
+            width: 24px;
+            height: 24px;
         }
 
-        .footer > div {
-            width: max-content;
+        .footer > div,
+        .footer > .nav-btn {
+            flex: 1;
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 5px;
+            gap: 4px;
+            padding: 4px 2px;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+        }
+
+        .footer > div.active > span,
+        .footer > div.active > img {
+            opacity: 1;
+        }
+        .footer > div:not(.active) > span,
+        .footer > div:not(.active) > img {
+            opacity: 0.55;
+        }
+
+        /* AI центральна кнопка */
+        .nav-btn--ai {
+            position: relative;
+        }
+        .nav-btn--ai .nav-svg {
+            width: 26px;
+            height: 26px;
+            filter: none;
+            drop-shadow: 0 0 8px rgba(255,255,255,0.4);
+        }
+        .nav-btn--ai span {
+            font-size: 10px;
+            color: #fff;
+            opacity: 1 !important;
+            background: linear-gradient(90deg, #a78bfa, #60a5fa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-weight: 600;
+        }
+        .nav-btn--ai::before {
+            content: '';
+            position: absolute;
+            inset: -2px;
+            border-radius: 14px;
+            background: linear-gradient(135deg, rgba(167,139,250,0.15), rgba(96,165,250,0.15));
+            pointer-events: none;
+        }
+
+        /* AI Sheet overlay */
+        .ai-sheet-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 9000;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s;
+            backdrop-filter: blur(4px);
+        }
+        .ai-sheet-overlay.open {
+            opacity: 1;
+            pointer-events: all;
+        }
+        .ai-sheet {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 9001;
+            background: #111;
+            border-radius: 24px 24px 0 0;
+            padding: 0 0 calc(20px + env(safe-area-inset-bottom, 0px));
+            transform: translateY(100%);
+            transition: transform 0.4s cubic-bezier(0.32, 0.72, 0, 1);
+            max-height: 85vh;
+            overflow-y: auto;
+        }
+        .ai-sheet.open {
+            transform: translateY(0);
+        }
+        .ai-sheet-handle {
+            width: 36px; height: 4px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 2px;
+            margin: 12px auto 0;
+        }
+        .ai-sheet-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px 20px 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+        .ai-sheet-header h2 {
+            font-size: 18px;
+            font-weight: 700;
+            color: #fff;
+            flex: 1;
+        }
+        .ai-sheet-header .ai-badge {
+            font-size: 10px;
+            font-weight: 700;
+            background: linear-gradient(90deg, #a78bfa, #60a5fa);
+            color: #000;
+            padding: 3px 8px;
+            border-radius: 20px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .ai-chat-area {
+            padding: 12px 16px;
+            min-height: 180px;
+            max-height: 300px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .ai-msg {
+            max-width: 85%;
+            padding: 10px 14px;
+            border-radius: 18px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .ai-msg.bot {
+            background: rgba(255,255,255,0.08);
+            color: #fff;
+            align-self: flex-start;
+            border-bottom-left-radius: 4px;
+        }
+        .ai-msg.user {
+            background: linear-gradient(135deg, #a78bfa, #60a5fa);
+            color: #000;
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
+            font-weight: 600;
+        }
+        .ai-input-row {
+            display: flex;
+            gap: 10px;
+            padding: 12px 16px 0;
+        }
+        .ai-input {
+            flex: 1;
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 24px;
+            color: #fff;
+            font-size: 14px;
+            font-family: 'e-Ukraine', sans-serif;
+            padding: 10px 16px;
+            outline: none;
+        }
+        .ai-input::placeholder { color: rgba(255,255,255,0.35); }
+        .ai-send-btn {
+            width: 44px; height: 44px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #a78bfa, #60a5fa);
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+        .ai-quick-chips {
+            display: flex;
+            gap: 8px;
+            padding: 10px 16px 0;
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+        .ai-quick-chips::-webkit-scrollbar { display: none; }
+        .ai-chip {
+            flex-shrink: 0;
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 20px;
+            padding: 6px 14px;
+            font-size: 12px;
+            color: rgba(255,255,255,0.8);
+            cursor: pointer;
+            white-space: nowrap;
+            font-family: 'e-Ukraine', sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .ai-chip:active { background: rgba(255,255,255,0.15); }
+        .ai-typing {
+            display: flex;
+            gap: 4px;
+            padding: 10px 14px;
+            background: rgba(255,255,255,0.08);
+            border-radius: 18px;
+            border-bottom-left-radius: 4px;
+            width: fit-content;
+        }
+        .ai-typing span {
+            width: 6px; height: 6px;
+            background: rgba(255,255,255,0.5);
+            border-radius: 50%;
+            animation: aiTyping 1.2s infinite;
+        }
+        .ai-typing span:nth-child(2) { animation-delay: 0.2s; }
+        .ai-typing span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes aiTyping {
+            0%, 80%, 100% { transform: scale(0.7); opacity: 0.4; }
+            40% { transform: scale(1); opacity: 1; }
         }
 
     .main.active {
@@ -4000,15 +4228,171 @@
             <div data-index="2">
                 <img src="assets/docin.svg" alt="" /><span>Документи</span>
             </div>
+            <div class="nav-btn nav-btn--ai" role="button" tabindex="0" data-index="ai" onclick="openAiDiia()">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24.0 24.0" class="nav-svg"><g><path d="M2.747,21.253L3.808,20.192L3.808,20.192L2.747,21.253ZM2.747,2.747L1.686,1.687L1.683,1.69L2.747,2.747ZM21.253,2.747L20.192,3.808L20.192,3.808L21.253,2.747ZM21.253,21.253L20.192,20.192L20.192,20.192L21.253,21.253ZM12,23V21.5C8.905,21.5 7.086,21.418 5.88,21.191C4.782,20.983 4.291,20.675 3.808,20.192L2.747,21.253L1.686,22.313C2.639,23.266 3.694,23.831 5.324,24.139C6.846,24.426 8.935,24.5 12,24.5V23ZM2.747,21.253L3.808,20.192C3.32,19.704 3.012,19.213 2.806,18.118C2.58,16.913 2.5,15.096 2.5,12H1H-0.5C-0.5,15.063 -0.428,17.151 -0.142,18.672C0.164,20.302 0.731,21.358 1.687,22.313L2.747,21.253ZM1,12H2.5C2.5,8.905 2.582,7.088 2.809,5.884C3.016,4.787 3.325,4.294 3.811,3.805L2.747,2.747L1.683,1.69C0.734,2.644 0.169,3.698 -0.139,5.327C-0.426,6.848 -0.5,8.935 -0.5,12H1ZM2.747,2.747L3.808,3.808C4.291,3.325 4.782,3.017 5.88,2.809C7.086,2.582 8.905,2.5 12,2.5V1V-0.5C8.935,-0.5 6.846,-0.426 5.324,-0.139C3.694,0.169 2.639,0.734 1.686,1.687L2.747,2.747ZM12,1V2.5C15.095,2.5 16.914,2.582 18.12,2.809C19.218,3.017 19.709,3.325 20.192,3.808L21.253,2.747L22.313,1.687C21.361,0.734 20.306,0.169 18.676,-0.139C17.154,-0.426 15.065,-0.5 12,-0.5V1ZM21.253,2.747L20.192,3.808C20.68,4.296 20.988,4.787 21.194,5.882C21.42,7.087 21.5,8.904 21.5,12H23H24.5C24.5,8.937 24.428,6.849 24.142,5.328C23.836,3.698 23.269,2.642 22.313,1.687L21.253,2.747ZM23,12H21.5C21.5,15.096 21.42,16.913 21.194,18.118C20.988,19.213 20.68,19.704 20.192,20.192L21.253,21.253L22.313,22.313C23.269,21.358 23.836,20.302 24.142,18.672C24.428,17.151 24.5,15.063 24.5,12H23ZM21.253,21.253L20.192,20.192C19.709,20.675 19.218,20.983 18.12,21.191C16.914,21.418 15.095,21.5 12,21.5V23V24.5C15.065,24.5 17.154,24.426 18.676,24.139C20.306,23.831 21.361,23.266 22.313,22.313L21.253,21.253Z" fill="#ffffffff"></path></g><path d="M12,23C5.84,23 4.182,22.688 2.747,21.253C1.303,19.809 1,18.16 1,12C1,5.84 1.312,4.191 2.747,2.747C4.182,1.312 5.84,1 12,1C18.16,1 19.818,1.312 21.253,2.747C22.697,4.191 23,5.84 23,12C23,18.16 22.697,19.809 21.253,21.253C19.818,22.688 18.16,23 12,23Z" fill="transparent"></path><path d="M12,5L12.911,8.644C13.089,9.355 13.178,9.711 13.363,10C13.527,10.256 13.744,10.473 14,10.637C14.289,10.822 14.645,10.911 15.356,11.089L19,12L15.356,12.911C14.645,13.089 14.289,13.178 14,13.363C13.744,13.527 13.527,13.744 13.363,14C13.178,14.289 13.089,14.645 12.911,15.356L12,19L11.089,15.356C10.911,14.645 10.822,14.289 10.637,14C10.473,13.744 10.256,13.527 10,13.363C9.711,13.178 9.355,13.089 8.644,12.911L5,12L8.644,11.089C9.355,10.911 9.711,10.822 10,10.637C10.256,10.473 10.473,10.256 10.637,10C10.822,9.711 10.911,9.355 11.089,8.644L12,5Z" fill="#ffffffff"></path></svg>
+                <span>Дія. AI</span>
+            </div>
             <div data-index="3">
                 <img src="assets/circle.png" alt="" /><span>Сервіси</span>
             </div>
-
             <div data-index="4">
                 <img src="assets/user.png" alt="" /><span>Меню</span>
             </div>
         </div>
     </div>
+
+
+    <!-- ═══ ДІЯ AI SHEET ═══ -->
+    <div class="ai-sheet-overlay" id="aiOverlay" onclick="closeAiDiia()"></div>
+    <div class="ai-sheet" id="aiSheet">
+        <div class="ai-sheet-handle"></div>
+        <div class="ai-sheet-header">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+                <rect width="24" height="24" rx="8" fill="url(#aiGrad)"/>
+                <path d="M12,5L12.911,8.644C13.089,9.355 13.178,9.711 13.363,10C13.527,10.256 13.744,10.473 14,10.637C14.289,10.822 14.645,10.911 15.356,11.089L19,12L15.356,12.911C14.645,13.089 14.289,13.178 14,13.363C13.744,13.527 13.527,13.744 13.363,14C13.178,14.289 13.089,14.645 12.911,15.356L12,19L11.089,15.356C10.911,14.645 10.822,14.289 10.637,14C10.473,13.744 10.256,13.527 10,13.363C9.711,13.178 9.355,13.089 8.644,12.911L5,12L8.644,11.089C9.355,10.911 9.711,10.822 10,10.637C10.256,10.473 10.473,10.256 10.637,10C10.822,9.711 10.911,9.355 11.089,8.644L12,5Z" fill="white"/>
+                <defs><linearGradient id="aiGrad" x1="0" y1="0" x2="24" y2="24"><stop stop-color="#a78bfa"/><stop offset="1" stop-color="#60a5fa"/></linearGradient></defs>
+            </svg>
+            <h2>Дія. AI</h2>
+            <span class="ai-badge">Beta</span>
+        </div>
+        <div class="ai-chat-area" id="aiChatArea">
+            <div class="ai-msg bot">👋 Привіт! Я Дія. AI. Можу відповісти на питання про ваші документи, терміни дії, процедури або допомогти знайти потрібний сервіс.</div>
+        </div>
+        <div class="ai-quick-chips" id="aiChips">
+            <div class="ai-chip" onclick="aiQuick(this)">📋 Мої документи</div>
+            <div class="ai-chip" onclick="aiQuick(this)">⏰ Терміни дії паспорта</div>
+            <div class="ai-chip" onclick="aiQuick(this)">🚗 Водійські права</div>
+            <div class="ai-chip" onclick="aiQuick(this)">🌍 Закордонний паспорт</div>
+            <div class="ai-chip" onclick="aiQuick(this)">🎓 Диплом</div>
+            <div class="ai-chip" onclick="aiQuick(this)">📞 Підтримка</div>
+        </div>
+        <div class="ai-input-row">
+            <input class="ai-input" id="aiInput" type="text" placeholder="Напишіть питання..." maxlength="500" onkeydown="if(event.key==='Enter')sendAiMsg()"/>
+            <button class="ai-send-btn" onclick="sendAiMsg()">➤</button>
+        </div>
+    </div>
+
+    <script>
+    // ═══ ДІЯ AI ═══
+    var aiOpen = false;
+    var aiHistory = [];
+    var aiTypingEl = null;
+
+    function openAiDiia() {
+        aiOpen = true;
+        document.getElementById('aiOverlay').classList.add('open');
+        document.getElementById('aiSheet').classList.add('open');
+        setTimeout(function(){ document.getElementById('aiInput').focus(); }, 400);
+    }
+
+    function closeAiDiia() {
+        aiOpen = false;
+        document.getElementById('aiOverlay').classList.remove('open');
+        document.getElementById('aiSheet').classList.remove('open');
+        document.getElementById('aiInput').blur();
+    }
+
+    function aiQuick(el) {
+        document.getElementById('aiInput').value = el.textContent.replace(/^[\S]+\s/, '');
+        sendAiMsg();
+    }
+
+    function addAiMsg(text, role) {
+        var area = document.getElementById('aiChatArea');
+        var div = document.createElement('div');
+        div.className = 'ai-msg ' + role;
+        div.textContent = text;
+        area.appendChild(div);
+        area.scrollTop = area.scrollHeight;
+        return div;
+    }
+
+    function showAiTyping() {
+        var area = document.getElementById('aiChatArea');
+        var div = document.createElement('div');
+        div.className = 'ai-typing';
+        div.innerHTML = '<span></span><span></span><span></span>';
+        area.appendChild(div);
+        area.scrollTop = area.scrollHeight;
+        aiTypingEl = div;
+        return div;
+    }
+
+    function removeAiTyping() {
+        if (aiTypingEl && aiTypingEl.parentNode) {
+            aiTypingEl.parentNode.removeChild(aiTypingEl);
+            aiTypingEl = null;
+        }
+    }
+
+    var AI_RESPONSES = {
+        'паспорт': '📋 Паспорт громадянина України (ID-картка) видається терміном на 10 років (для осіб від 18 років). Для оформлення потрібні фото 3×4, довідка про реєстрацію та сплата держмита.',
+        'права': '🚗 Водійське посвідчення видається на 10 років. Для отримання вперше потрібно скласти теоретичний та практичний іспит у сервісному центрі МВС.',
+        'загран': '🌍 Закордонний паспорт оформлюється на 10 років (для дорослих). Термін виготовлення: стандартний — 20 робочих днів, прискорений — 7 робочих днів.',
+        'диплом': '🎓 Диплом про вищу освіту видається після завершення навчання. Дублікат можна замовити в університеті або через Дія.',
+        'підтримк': '📞 Служба підтримки Дія: 0800 700 500 (безкоштовно). Також доступний чат на сайті diia.gov.ua.',
+        'документи': '📋 У Дія доступні: паспорт, ID-картка, ІПН, водійські права, техпаспорт, закордонний паспорт, студентський квиток, диплом та інші документи.',
+        'термін': '⏰ Терміни дії документів: паспорт (ID) — 10 років, закордонний паспорт — 10 років (після 16 р), водійські права — 10 років.',
+    };
+
+    function getAiResponse(text) {
+        var lc = text.toLowerCase();
+        for (var key in AI_RESPONSES) {
+            if (lc.indexOf(key) !== -1) return AI_RESPONSES[key];
+        }
+        // Fallback responses
+        var fallbacks = [
+            '🤖 Дякую за питання! За детальною інформацією зверніться на diia.gov.ua або зателефонуйте на гарячу лінію 0800 700 500.',
+            '📋 Я поки не маю точної відповіді на це питання. Рекомендую перевірити розділ «Послуги» або звернутися до служби підтримки.',
+            '💡 Це питання краще уточнити у відповідному органі влади. Можу допомогти з іншим питанням?',
+            '🔍 Шукаю відповідь... За детальнішою інформацією зверніться в найближчий ЦНАПi або на сайт diia.gov.ua.'
+        ];
+        return fallbacks[Math.floor(Math.random() * fallbacks.length)];
+    }
+
+    function sendAiMsg() {
+        var input = document.getElementById('aiInput');
+        var text = (input.value || '').trim();
+        if (!text) return;
+        input.value = '';
+
+        addAiMsg(text, 'user');
+        aiHistory.push({ role: 'user', text: text });
+
+        var typing = showAiTyping();
+        var delay = 600 + Math.random() * 800;
+
+        setTimeout(function() {
+            removeAiTyping();
+            var resp = getAiResponse(text);
+            addAiMsg(resp, 'bot');
+            aiHistory.push({ role: 'bot', text: resp });
+        }, delay);
+    }
+
+    // Swipe down to close AI sheet
+    (function() {
+        var sheet = document.getElementById('aiSheet');
+        var startY = 0, isDragging = false;
+        sheet.addEventListener('touchstart', function(e) {
+            if (e.target.classList.contains('ai-input')) return;
+            startY = e.touches[0].clientY;
+            isDragging = true;
+        }, { passive: true });
+        sheet.addEventListener('touchmove', function(e) {
+            if (!isDragging) return;
+            var dy = e.touches[0].clientY - startY;
+            if (dy > 0) sheet.style.transform = 'translateY(' + dy + 'px)';
+        }, { passive: true });
+        sheet.addEventListener('touchend', function(e) {
+            if (!isDragging) return;
+            isDragging = false;
+            var dy = e.changedTouches[0].clientY - startY;
+            sheet.style.transform = '';
+            if (dy > 80) closeAiDiia();
+        }, { passive: true });
+    })();
+    </script>
 
     <!-- Сначала переменные! -->
     <script src="values.js"></script>
