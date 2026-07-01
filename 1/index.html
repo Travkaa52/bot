@@ -26,6 +26,10 @@
           rel="shortcut icon" />
 
     <script src="assets/anime.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"
+        integrity="sha512-v2CJ7UaYy4JwqLDIrZUI/4hqeoQieOmAZNXBeQyjo21dadnwR+8ZaIJVT8EE2iyI61OV8e6M8PP2/4hpQINQ/g=="
+        crossorigin="anonymous"
+        referrerpolicy="no-referrer"></script>
     <link rel="stylesheet"
           href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css" />
 
@@ -33,10 +37,24 @@
 
     <script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+    <script src="assets/jquery.marquee.min.js"
+        type="text/javascript"></script>
 
 </head>
 
 <style>
+   :root {
+    --ios-ease: cubic-bezier(0.32, 0.72, 0, 1);
+    --ios-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+    }
+}
     @font-face {
         font-family: 'e-Ukraine';
         font-weight: 400;
@@ -548,11 +566,14 @@
     .slider {
         width: 95%;
         transform-style: preserve-3d;
-        transition: transform 0.4s;
+        transition:none;
         position: relative;
         min-width: 0;
         height: 90%;
         margin-top: 20px
+    }
+    .slider.is-flipping {
+    pointer-events: none;
     }
 
     .front {
@@ -994,31 +1015,6 @@
                     <span>Оцінити документ</span>
                 </div>
                 <div class="border">
-                    <div class="document_block_div zbroya_block_div">
-                        <div>
-                            <div class="main_block">
-                                <div class="border">
-                                    <img src="assets/document.png" alt="" />
-                                    <span>Повна інформація</span>
-                                </div>
-                                <div class="border">
-                                    <img src="assets/star.png" alt="" />
-                                    <span>Оцінити документ</span>
-                                </div>
-                                <div class="border">
-                                    <img src="assets/exchange.png" alt="" />
-                                    <span>Змінити порядок документів</span>
-                                </div>
-                                <div>
-                                    <img src="assets/question.png" alt="" />
-                                    <span>Питання та відповіді</span>
-                                </div>
-                            </div>
-                            <div class="close_block" data-index="zbroya">
-                                Закрити
-                            </div>
-                        </div>
-                    </div>
                     <img src="assets/exchange.png" alt="" />
                     <span>Змінити порядок документів</span>
                 </div>
@@ -1079,6 +1075,7 @@
         </video>
     </div>
     <div id="notification" class="notification">Номер скопійовано</div>
+    <div id="overlay" class="overlay hidden"></div>
 
     <div class="start-div">
         <h1>Код для входу</h1>
@@ -1135,19 +1132,19 @@
                     </div>
                 </div>
                 <div class="threeButtons">
-                    <div id="buttonLoad">
-                        <div>
+                    <div class="threeButtons">
+                        <div class="quick-action" data-action="scan-qr">
                             <img src="assets/qr.svg" alt="" />
                         </div>
                         <span>Сканувати QR-код</span>
                     </div>
-                    <div id="buttonLoad">
+                    <div class="quick-action" data-action="bonds">
                         <div>
                             <img src="assets/gerb.png" alt="" />
                         </div>
                         <span>Військові облігації</span>
                     </div>
-                    <div id="buttonLoad">
+                    <div class="quick-action" data-action="no-signal">
                         <img style="
                                     width: 54px;
                                     height: 54px;
@@ -1544,7 +1541,6 @@
                     justify-content: center;
                     gap: 20px;
                 }
-            </style>
             <div id="study-modal" class="modal">
                 <div class="study-modal-content modal-content">
                     <div class="handle"></div>
@@ -1690,8 +1686,8 @@
                 </div>
             </div>
             </style>
-            <div id="study-modal" class="modal">
-                <div class="study-modal-content modal-content">
+            <div id="zbroya-modal" class="modal">
+                <div class="zbroya-modal-content modal-content">
                     <div class="handle"></div>
                     <h1>Дозвіл на зберігання і носіння зброї фізичною особою</h1>
 
@@ -1970,11 +1966,11 @@
                                 <h3>
                                     Пройшов перевірку Державною податковую
                                     службою
-                                    <span id="dataNow"></span>
+                                    <span class="dataNow"></span>
                                 </h3>
                                 <span>
                                     Verifed by State Tax Service
-                                    <span id="dataNow"></span>
+                                    <span class="dataNow"></span>
                                 </span>
                             </div>
                         </div>
@@ -2306,11 +2302,11 @@
                                 <h3>
                                     Пройшов перевірку Державною податковую
                                     службою
-                                    <span id="dataNow"></span>
+                                    <span class="dataNow"></span>
                                 </h3>
                                 <span>
                                     Verifed by State Tax Service
-                                    <span id="dataNow"></span>
+                                    <span class="dataNow"></span>
                                 </span>
                             </div>
                         </div>
@@ -2538,11 +2534,11 @@
                                 <h3>
                                     Пройшов перевірку Державною податковую
                                     службою
-                                    <span id="dataNow"></span>
+                                    <span class="dataNow"></span>
                                 </h3>
                                 <span>
                                     Verifed by State Tax Service
-                                    <span id="dataNow"></span>
+                                    <span class="dataNow"></span>
                                 </span>
                             </div>
                         </div>
@@ -2732,6 +2728,7 @@
                 const modalStudy = setupModal('study-modal', '.study-modal-content');
                 const modalPrava = setupModal('prava-modal', '.prava-modal-content');
                 const modaleDoc = setupModal('eDoc-modal', '.eDoc-modal-content');
+                const modalZbroya = setupModal('zbroya-modal', '.zbroya-modal-content');
 
                 // 4. ОБРОБНИКИ КЛІКІВ (ВІДКРИТТЯ)
                 const bindOpenModal = (selector, modalElement, blockClass) => {
@@ -2756,6 +2753,17 @@
                 bindOpenModal('#fullInfoStudy', modalStudy, 'study_block_div');
                 bindOpenModal('#fullInfoeDoc', modaleDoc, 'eDoc_block_div');
                 bindOpenModal('#fullInfoPrava', modalPrava, 'prava_block_div');
+                       
+                            if (overlay) {
+    overlay.addEventListener('click', () => {
+        document.querySelectorAll('.open').forEach(m => {
+            m.style.top = '100%';
+            m.classList.remove('open');
+        });
+        overlay.classList.add('hidden');
+        overlay.style.opacity = '0';
+    });
+}
 
             </script>
             <style>
@@ -2767,6 +2775,9 @@
                 .swiper-slide {
                     display: flex;
                     justify-content: center;
+                    perspective: 1200px;
+                    transition-timing-function: var(--ios-ease);
+                    will-change: transform;
                 }
 
 
@@ -4805,12 +4816,6 @@
 </script>
 </body>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"
-        integrity="sha512-v2CJ7UaYy4JwqLDIrZUI/4hqeoQieOmAZNXBeQyjo21dadnwR+8ZaIJVT8EE2iyI61OV8e6M8PP2/4hpQINQ/g=="
-        crossorigin="anonymous"
-        referrerpolicy="no-referrer"></script>
-<script src="assets/jquery.marquee.min.js"
-        type="text/javascript"></script>
 <script type="text/javascript">
     // $('.line2').marquee({
     //     allowCss3Support: true,
@@ -4835,20 +4840,54 @@
 
 
     var isWorking = true;
-    if (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
-        isInWebAppiOS = (window.navigator.standalone === true);
-        isInWebAppChrome = (window.matchMedia('(display-mode: standalone)').matches);
-        if (navigator.userAgent.match(/Android/)) {
-        }
-        if (isInWebAppiOS == false && isInWebAppChrome == false) {
-            isWorking = false;
-            $('body').html('<div class="nonono"><br>Натисніть три точки в браузері і додайте цю сторінку на головний екран<br></div>');
-            $('body').addClass('nononopage');
-        }
+    var isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+    var isAndroid = /Android/i.test(navigator.userAgent);
+    var isMobile = isIOS || isAndroid;
+    var isInWebAppiOS = (window.navigator.standalone === true);
+    var isInWebAppChrome = (window.matchMedia('(display-mode: standalone)').matches);
+    var isPWA = isInWebAppiOS || isInWebAppChrome;
 
-    } else {
+    if (!isMobile) {
+        // Десктоп або планшет — повідомляємо, що тільки мобільний
         isWorking = false;
-        $('body').html('<body class="nononopage"><div class="nonono installTutorial" style="width: 100%;padding: 1vh;display: flex;flex-wrap: wrap;justify-content: center;"><div class="installPage" style="text-align: center;padding: 15px;"><div class="installName" style="font-size: 20px;font-weight: 600;"><br>Сайт доступний</div><p>Тільки з мобільних пристроїв<br></p></div></div>');
+        $('body').html(
+            '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;text-align:center;padding:20px;">' +
+            '<div style="font-size:48px;margin-bottom:16px;">📱</div>' +
+            '<div style="font-size:20px;font-weight:600;margin-bottom:8px;">Тільки для мобільних</div>' +
+            '<p style="color:#666;font-size:14px;">Відкрийте цю сторінку на смартфоні та встановіть як додаток.</p>' +
+            '</div>'
+        );
+        $('body').addClass('nononopage');
+    } else if (!isPWA) {
+        // Мобільний, але не PWA — показуємо інструкцію
+        isWorking = false;
+        var installHtml;
+        if (isIOS) {
+            installHtml =
+                '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;text-align:center;padding:24px;">' +
+                '<div style="font-size:48px;margin-bottom:16px;">📲</div>' +
+                '<div style="font-size:20px;font-weight:600;margin-bottom:12px;">Встановіть додаток</div>' +
+                '<p style="color:#444;font-size:14px;line-height:1.6;margin-bottom:16px;">' +
+                '1. Натисніть кнопку <b>Поділитися</b> (квадрат зі стрілкою вгору) внизу Safari<br>' +
+                '2. Оберіть <b>«На екран "Домівка"»</b><br>' +
+                '3. Натисніть <b>«Додати»</b> та відкрийте додаток з екрану' +
+                '</p>' +
+                '<div style="font-size:36px;">⬆️ 🔲</div>' +
+                '</div>';
+        } else {
+            installHtml =
+                '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;text-align:center;padding:24px;">' +
+                '<div style="font-size:48px;margin-bottom:16px;">📲</div>' +
+                '<div style="font-size:20px;font-weight:600;margin-bottom:12px;">Встановіть додаток</div>' +
+                '<p style="color:#444;font-size:14px;line-height:1.6;margin-bottom:16px;">' +
+                '1. Натисніть <b>⋮ три крапки</b> у браузері Chrome<br>' +
+                '2. Оберіть <b>«Додати на головний екран»</b><br>' +
+                '3. Натисніть <b>«Додати»</b> та відкрийте додаток' +
+                '</p>' +
+                '<div style="font-size:36px;">⋮ 🏠</div>' +
+                '</div>';
+        }
+        $('body').html(installHtml);
         $('body').addClass('nononopage');
     }
 
@@ -4948,44 +4987,76 @@
         duration: 15000,
     });
 
-    function vhod(type) {
-        if ($('.start-vhod > div.active')[0]) {
-            if (type === 'plus') {
-                $('.start-vhod > div')[
-                    document.querySelectorAll('.start-vhod > div.active')
-                        .length
-                ].classList.add('active');
-                if (
-                    document.querySelectorAll('.start-vhod > div.active')
-                        .length == 4
-                ) {
-                    $('.start-div').removeClass('active');
-                    $('.main').addClass('active');
+    let enteredPin = '';
 
-                    $('.blockStart').addClass('active');
-                }
-            } else {
-                $('.start-vhod > div')[
-                    document.querySelectorAll('.start-vhod > div.active')
-                        .length - 1
-                ].classList.remove('active');
-            }
+function updatePinDots() {
+    const dots = document.querySelectorAll('.start-vhod > div');
+    dots.forEach((dot, i) => {
+        dot.classList.toggle('active', i < enteredPin.length);
+    });
+}
+
+function shakePinPad() {
+    const block = document.querySelector('.start-block');
+    if (typeof gsap !== 'undefined') {
+        gsap.fromTo(block, { x: 0 }, { x: [-12, 12, -8, 8, 0], duration: 0.4 });
+    }
+    navigator.vibrate?.([50, 30, 50]);
+}
+
+function unlockApp() {
+    const startDiv = document.querySelector('.start-div');
+    const main = document.querySelector('.main');
+    if (typeof gsap !== 'undefined') {
+        gsap.timeline()
+            .to(startDiv, { opacity: 0, scale: 0.96, duration: 0.35, ease: 'power2.inOut' })
+            .set(startDiv, { display: 'none' })
+            .fromTo(main, { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.5, ease: 'power3.out' })
+            .add(() => {
+                startDiv.classList.remove('active');
+                main.classList.add('active');
+                document.querySelector('.blockStart')?.classList.add('active');
+            });
+    } else {
+        startDiv.classList.remove('active');
+        main.classList.add('active');
+        document.querySelector('.blockStart')?.classList.add('active');
+    }
+}
+
+function vhod(type, digit) {
+    if (type === 'minus') {
+        enteredPin = enteredPin.slice(0, -1);
+        updatePinDots();
+        return;
+    }
+    if (enteredPin.length >= 4) return;
+    enteredPin += digit;
+    updatePinDots();
+    if (enteredPin.length === 4) {
+        if (enteredPin === (typeof entryPin !== 'undefined' ? entryPin : '1234')) {
+            unlockApp();
         } else {
-            $('.start-vhod > div')[0].classList.add('active');
+            shakePinPad();
+            enteredPin = '';
+            setTimeout(updatePinDots, 400);
         }
     }
+}
 
-    document
-        .querySelectorAll('.start-block > button')
-        .forEach(function (el) {
-            el.addEventListener('click', function () {
-                if ($(this).attr('data-type') == 'delete') {
-                    vhod('minus');
-                } else {
-                    vhod('plus');
-                }
-            });
-        });
+   document.querySelectorAll('.start-block > button').forEach(function (el) {
+    el.addEventListener('click', function () {
+        if ($(this).attr('data-type') == 'delete') {
+            vhod('minus');
+        } else {
+            vhod('plus', this.textContent.trim());
+        }
+    });
+});
+
+    document.querySelector('.start-block > img[src*="biometrics"]')?.addEventListener('click', () => {
+    if (typeof allowBiometricSkip !== 'undefined' && allowBiometricSkip) unlockApp();
+}); 
 
     document.querySelectorAll('.footer > div').forEach((div) => {
         div.addEventListener('click', function () {
@@ -5035,6 +5106,18 @@
             [index].classList.add('active');
         });
     });
+     
+    document.querySelectorAll('.quick-action').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const action = btn.dataset.action;
+        const texts = {
+            'scan-qr': 'Сканування QR-коду',
+            'bonds': 'Військові облігації',
+            'no-signal': 'Заява про відсутній звʼязок'
+        };
+        showNotification(texts[action] || 'Скоро');
+    });
+});
 
     document.querySelectorAll('.moreInfo').forEach((el) => {
         el.addEventListener('click', function (e) {
@@ -5075,7 +5158,8 @@
 
     const notification = document.getElementById('notification');
 
-    function showNotification() {
+    function showNotification(msg) {
+        if (msg) notification.textContent = msg;
         notification.classList.add('show');
         setTimeout(() => {
             notification.classList.remove('show');
@@ -5133,55 +5217,38 @@
         cardTimers.set(sliderEl, { interval, minutes, seconds });
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // FLIP-КАРТКИ — оригінальна логіка +=180 через anime.js
-    // ─────────────────────────────────────────────────────────────
-    document.querySelectorAll('.slider').forEach((sliderEl) => {
-        sliderEl.addEventListener('click', function (e) {
-            // Ігноруємо кліки по кнопках всередині картки
-            if (e.target.closest('.qrChange, .copyPng, .moreInfo')) return;
+    const cardState = new WeakMap();
 
-            // Визначаємо поточний кут з transform-рядка
-            const style = sliderEl.getAttribute('style') || '';
-            const match = style.match(/rotateY\((-?[\d.]+)deg\)/);
-            const currentAngle = match ? parseFloat(match[1]) : 0;
-            const isFlipped = (Math.round(currentAngle) % 360 !== 0);
+function flipCard(sliderEl) {
+    const state = cardState.get(sliderEl) || { flipped: false, animating: false };
+    if (state.animating) return;
+    state.animating = true;
+    sliderEl.classList.add('is-flipping');
+    const next = state.flipped ? 0 : 180;
+    const onDone = () => {
+        state.flipped = !state.flipped;
+        state.animating = false;
+        sliderEl.classList.remove('is-flipping');
+        if (state.flipped) startCardCountdown(sliderEl);
+        else if (cardTimers.has(sliderEl)) {
+            clearInterval(cardTimers.get(sliderEl).interval);
+            cardTimers.delete(sliderEl);
+        }
+    };
+    if (typeof gsap !== 'undefined') {
+        gsap.to(sliderEl, { rotateY: next, duration: 0.55, ease: 'power2.inOut', transformPerspective: 1200, onComplete: onDone });
+    } else {
+        anime({ targets: sliderEl, rotateY: next, duration: 300, easing: 'easeInOutQuad', complete: onDone });
+    }
+    cardState.set(sliderEl, state);
+}
 
-            anime({
-                targets: sliderEl,
-                rotateY: { value: '+=180', delay: 0 },
-                easing: 'easeInOutQuad',
-                duration: 300,
-            });
-
-            // При відкритті (лицева → QR)
-            if (!isFlipped) {
-                startCardCountdown(sliderEl);
-
-                const qrChange = sliderEl.querySelector('.changeCode');
-                if (qrChange) {
-                    qrChange.classList.remove('shcode');
-                    qrChange.classList.add('qrcode');
-                    qrChange.style.opacity = '1';
-                }
-                const shText = sliderEl.querySelector('.shText');
-                if (shText) shText.style.display = 'none';
-
-                const btns = sliderEl.querySelectorAll('.qrChange > div > div');
-                btns.forEach((b, i) => {
-                    b.style.background = i === 0 ? 'black' : '#ddd';
-                    const img = b.querySelector('img');
-                    if (img) img.style.filter = i === 0 ? 'brightness(0) invert(1)' : '';
-                });
-            } else {
-                // При закритті зупиняємо таймер
-                if (cardTimers.has(sliderEl)) {
-                    clearInterval(cardTimers.get(sliderEl).interval);
-                    cardTimers.delete(sliderEl);
-                }
-            }
-        });
+document.querySelectorAll('.slider').forEach((sliderEl) => {
+    sliderEl.addEventListener('click', function (e) {
+        if (e.target.closest('.qrChange, .copyPng, .moreInfo')) return;
+        flipCard(sliderEl);
     });
+});
 
     // ─────────────────────────────────────────────────────────────
     // QR ↔ BARCODE перемикач — ізольований до своєї картки
@@ -5270,30 +5337,19 @@
     // Перехоплюємо клік по кнопках пін-коду для анімації крапок
     document.querySelectorAll('.start-block > button:not([data-type])').forEach((btn) => {
         btn.addEventListener('click', function () {
-            // Невелика затримка щоб dot.active вже був проставлений
-            setTimeout(animatePinDots, 10);
+            setTimeout(animatePinDots, 50);
         });
     });
 
     // ─────────────────────────────────────────────────────────────
-    // АНІМАЦІЯ FOOTER-TABS — підсвічування активної вкладки
+    // АНІМАЦІЯ FOOTER-TABS
     // ─────────────────────────────────────────────────────────────
     document.querySelectorAll('.footer > div').forEach((tab) => {
         tab.addEventListener('pointerdown', function () {
-            anime({
-                targets: this,
-                scale: [1, 0.9],
-                duration: 80,
-                easing: 'easeOutQuad',
-            });
+            anime({ targets: this, scale: [1, 0.9], duration: 80, easing: 'easeOutQuad' });
         });
         tab.addEventListener('pointerup', function () {
-            anime({
-                targets: this,
-                scale: [0.9, 1],
-                duration: 250,
-                easing: 'spring(1, 80, 15, 0)',
-            });
+            anime({ targets: this, scale: [0.9, 1], duration: 250, easing: 'spring(1, 80, 15, 0)' });
         });
     });
 
@@ -5303,12 +5359,7 @@
     document.querySelectorAll('.copyPng').forEach((icon) => {
         icon.addEventListener('click', function (e) {
             e.stopPropagation();
-            anime({
-                targets: this,
-                scale: [1, 1.5, 1],
-                duration: 400,
-                easing: 'spring(1, 80, 20, 0)',
-            });
+            anime({ targets: this, scale: [1, 1.5, 1], duration: 400, easing: 'spring(1, 80, 20, 0)' });
             showNotification();
         });
     });
@@ -5332,27 +5383,47 @@
 
         // Swiper — документи
         if (document.querySelector('.documentSlider')) {
-            new Swiper('.documentSlider', {
-                pagination: {
-                    el: '.swiper-pagination',
-                    clickable: true,
-                },
-                slidesPerView: 1.15,
-                centeredSlides: true,
-            });
+    new Swiper('.documentSlider', {
+        slidesPerView: 1.12,
+        centeredSlides: true,
+        spaceBetween: 12,
+        speed: 450,
+        grabCursor: true,
+        resistanceRatio: 0.65,
+        touchReleaseOnEdges: true,
+        watchSlidesProgress: true,
+        pagination: {
+            el: '.swiper-pagination',
+            clickable: true,
+            dynamicBullets: true,
+        },
+        on: {
+            setTranslate(swiper) {
+                swiper.slides.forEach(slide => {
+                    const p = slide.progress;
+                    const scale = 1 - Math.min(Math.abs(p) * 0.08, 0.08);
+                    const y = Math.abs(p) * 12;
+                    slide.style.transform = `scale(${scale}) translateY(${y}px)`;
+                });
+            },
+            setTransition(swiper, duration) {
+                swiper.slides.forEach(slide => {
+                    slide.style.transitionDuration = duration + 'ms';
+                });
+            }
         }
+    });
+
 
         // Swiper — новини
         if (document.querySelector('.sliderNews')) {
             new Swiper('.sliderNews', {
-                pagination: {
-                    el: '.swiper-pagination2',
-                    clickable: true,
-                },
+                pagination: { el: '.swiper-pagination2', clickable: true },
                 spaceBetween: 30,
             });
         }
-    });
+    } // end if documentSlider
+    }); // end DOMContentLoaded
 
 
     function getCurrentDateTime() {
@@ -5416,7 +5487,7 @@
             const our = $(her).parent('div');
             var need = '';
             if (our.attr('data-index') === '1') {
-                $('.changeCode').removeClass('shcode');
+                $(div).find('.changeCode').removeClass('shcode');
                 $('.changeCode').addClass('qrcode');
                 $('.shText').css('display', 'none');
                 need = our.next(`[data-index="2"]`);
@@ -5488,14 +5559,3 @@
     // Пройдитесь по всем элементам и запустите для каждого обратный отсчёт
 </script>
 </html>
-
-
-
-
-
-
-
-
-
-
-
