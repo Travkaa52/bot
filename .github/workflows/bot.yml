@@ -5,10 +5,9 @@ on:
     branches: [main, master]
   workflow_dispatch:
   schedule:
-    # Запуск кожні 5 годин
-    - cron: '0 */5 * * *'
+    # Запуск кожні 7 годин (6г робота + 1г перерви = цикл 7г)
+    - cron: '0 0,7,14,21 * * *'
 
-# Якщо запускається новий процес — старий зупиняється
 concurrency:
   group: bot-worker
   cancel-in-progress: true
@@ -16,7 +15,7 @@ concurrency:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 370
 
     steps:
       - name: ⬇️ Checkout
@@ -31,7 +30,7 @@ jobs:
       - name: 📦 Install dependencies
         run: pip install -r requirements.txt
 
-      - name: 🔄 Restore data files
+      - name: 🔄 Restore data cache
         uses: actions/cache@v4
         with:
           path: |
@@ -48,26 +47,39 @@ jobs:
           restore-keys: |
             bot-data-
 
-      - name: 🚀 Run Bot
+      - name: 🕐 Check schedule slot
+        id: slot
+        run: |
+          HOUR=$(date -u +%H)
+          echo "Current UTC hour: $HOUR"
+          # Кожен цикл: 6г бот + 1г пауза
+          # Слоти старту: 0,7,14,21 UTC
+          # Пауза: остання година перед наступним слотом
+          echo "slot_ok=true" >> $GITHUB_OUTPUT
+
+      - name: 🚀 Run Bot (6 hours)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
           GROUP_CHAT_ID: ${{ secrets.GROUP_CHAT_ID }}
           BOT_USERNAME: ${{ secrets.BOT_USERNAME }}
-          # GitHub Personal Access Token для деплою GitHub Pages
           PAGES_GH_TOKEN: ${{ secrets.PAGES_GH_TOKEN }}
-          # DeepSeek API ключ для AI-автоматизації
+          GH_TOKEN_2: ${{ secrets.GH_TOKEN_2 }}
+          GH_USERNAME: ${{ secrets.GH_USERNAME }}
+          GH_USERNAME_2: ${{ secrets.GH_USERNAME_2 }}
+          PAGES_REPO_1: ${{ secrets.PAGES_REPO_1 }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          SQLITECLOUD_URL: ${{ secrets.SQLITECLOUD_URL }}
           REFERRAL_REWARD: ${{ secrets.REFERRAL_REWARD }}
           MIN_WITHDRAW: ${{ secrets.MIN_WITHDRAW }}
           GITHUB_ACTIONS: "true"
           LOG_LEVEL: INFO
-          SQLITECLOUD_URL: ${{ secrets.SQLITECLOUD_URL }} # <--- ДОДАЙТЕ Ц
-          GH_TOKEN_2: ${{ secrets.GH_TOKEN_2 }}
-        # Зупиняємо через 295 хв, щоб встигнути зберегти кеш
-        run: timeout 295m python bot.py || true
+          # Передаємо час старту щоб бот знав коли зупинитись
+          BOT_RUN_MINUTES: "355"
+        # Зупиняємо через 355 хв (≈5г55хв) — щоб встигнути зберегти кеш
+        run: timeout 355m python bot.py || true
 
-      - name: 💾 Save data files
+      - name: 💾 Save data cache
         if: always()
         uses: actions/cache/save@v4
         with:
@@ -82,3 +94,12 @@ jobs:
             bot_settings.json
             order_photos/
           key: bot-data-${{ github.run_id }}
+
+      - name: 📊 Upload logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot-logs-${{ github.run_id }}
+          path: action_logs.json
+          retention-days: 7
+          if-no-files-found: ignore
