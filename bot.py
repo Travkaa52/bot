@@ -2553,7 +2553,7 @@ def main():
         FEEDBACK_KEY: {"load": _db.load_feedback, "save": _db.save_feedback},
         TARIFFS_KEY: {"load": _db.load_tariffs_db, "save": _db.save_tariffs_db},
         PROMOS_KEY: {"load": _db.load_promos_db, "save": _db.save_promos_db},
-        SETTINGS_KEY: {"load": _db.load_settings, "save": _db.save_settings},
+        SETTINGS_KEY: {"load": _db.load_settings_db, "save": _db.save_settings_db},
     }
 
     app = Application.builder().token(TOKEN).build()
