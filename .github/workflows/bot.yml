@@ -30,7 +30,7 @@ jobs:
       - name: 📦 Install dependencies
         run: pip install -r requirements.txt
 
-      - name: 🔄 Restore data cache
+      - name: 🔄 Restore & Save Data Cache
         uses: actions/cache@v4
         with:
           path: |
@@ -43,7 +43,7 @@ jobs:
             banned_users.json
             bot_settings.json
             order_photos/
-          key: bot-data-${{ github.run_id }}
+          key: bot-data-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             bot-data-
 
@@ -52,9 +52,6 @@ jobs:
         run: |
           HOUR=$(date -u +%H)
           echo "Current UTC hour: $HOUR"
-          # Кожен цикл: 6г бот + 1г пауза
-          # Слоти старту: 0,7,14,21 UTC
-          # Пауза: остання година перед наступним слотом
           echo "slot_ok=true" >> $GITHUB_OUTPUT
 
       - name: 🚀 Run Bot (6 hours)
@@ -74,26 +71,9 @@ jobs:
           MIN_WITHDRAW: ${{ secrets.MIN_WITHDRAW }}
           GITHUB_ACTIONS: "true"
           LOG_LEVEL: INFO
-          # Передаємо час старту щоб бот знав коли зупинитись
           BOT_RUN_MINUTES: "355"
-        # Зупиняємо через 355 хв (≈5г55хв) — щоб встигнути зберегти кеш
-        run: timeout 355m python bot.py || true
-
-      - name: 💾 Save data cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            users_data.json
-            orders_data.json
-            feedback_data.json
-            tariffs_data.json
-            promo_data.json
-            action_logs.json
-            banned_users.json
-            bot_settings.json
-            order_photos/
-          key: bot-data-${{ github.run_id }}
+        # timeout зупинить бота через 355 хв (код повернення 124 — це нормальна зупинка за таймером)
+        run: timeout 355m python bot.py || if [ $? -eq 124 ]; then echo "Time limit reached, stopping gracefully"; else exit 1; fi
 
       - name: 📊 Upload logs artifact
         if: always()
