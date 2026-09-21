@@ -54,7 +54,8 @@ def _headers(token: str) -> dict:
 
 def _gh(token: str, method: str, path: str, **kwargs):
     resp = requests.request(
-        method, f"{API}{path}",
+        method,
+        f"{API}{path}",
         headers=_headers(token),
         timeout=30,
         **kwargs,
@@ -66,23 +67,29 @@ def _gh(token: str, method: str, path: str, **kwargs):
 
 
 def _get_username(token: str, override: str | None) -> str:
-    if override:
-        return override
+    if override and override.strip():
+        return override.strip()
     return _gh(token, "GET", "/user")["login"]
 
 
 def _make_repo_name(prefix: str, order_id: str | None) -> str:
     """Унікальна назва репо для кожного замовлення."""
+    clean_prefix = (prefix or "site2").strip()
     if order_id:
         safe_id = re.sub(r"[^a-zA-Z0-9_-]", "-", str(order_id))[:30]
-        name = f"{prefix}-{safe_id}"
+        name = f"{clean_prefix}-{safe_id}"
     else:
         ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-        name = f"{prefix}-{ts}"
+        name = f"{clean_prefix}-{ts}"
     return name[:100]
 
 
 def _ensure_repo(token: str, username: str, repo_name: str) -> None:
+    if not repo_name or not repo_name.strip():
+        raise DeployError(f"Назва репозиторію порожня! (username={username}, repo_name={repo_name!r})")
+
+    repo_name = repo_name.strip()
+
     try:
         _gh(token, "GET", f"/repos/{username}/{repo_name}")
         logger.info("Repo exists: %s/%s", username, repo_name)
@@ -90,23 +97,34 @@ def _ensure_repo(token: str, username: str, repo_name: str) -> None:
     except requests.HTTPError as e:
         if e.response.status_code != 404:
             raise
-    _gh(token, "POST", "/user/repos", json={
-        "name": repo_name,
-        "description": "FunsDiia order deploy",
-        "private": False,
-        "auto_init": False,
-        "has_issues": False,
-        "has_projects": False,
-        "has_wiki": False,
-    })
+
+    logger.info("Creating repository: %s/%s", username, repo_name)
+    _gh(
+        token,
+        "POST",
+        "/user/repos",
+        json={
+            "name": repo_name,
+            "description": "FunsDiia order deploy",
+            "private": False,
+            "auto_init": False,
+            "has_issues": False,
+            "has_projects": False,
+            "has_wiki": False,
+        },
+    )
     logger.info("Repo created: %s/%s", username, repo_name)
     time.sleep(2)
 
 
 def _get_file_sha(token: str, username: str, repo: str, path: str) -> str | None:
     try:
-        return _gh(token, "GET", f"/repos/{username}/{repo}/contents/{path}",
-                   params={"ref": BRANCH}).get("sha")
+        return _gh(
+            token,
+            "GET",
+            f"/repos/{username}/{repo}/contents/{path}",
+            params={"ref": BRANCH},
+        ).get("sha")
     except requests.HTTPError:
         return None
 
@@ -130,9 +148,7 @@ def _collect_files(local_dir: str) -> dict[str, pathlib.Path]:
     files = {
         str(f.relative_to(root)).replace("\\", "/"): f
         for f in root.rglob("*")
-        if f.is_file()
-        and ".git" not in f.parts
-        and "__pycache__" not in f.parts
+        if f.is_file() and ".git" not in f.parts and "__pycache__" not in f.parts
     }
     if not files:
         raise DeployError(f"У папці '{local_dir}' немає файлів")
@@ -147,8 +163,13 @@ def _enable_pages(token: str, username: str, repo: str) -> str:
     except requests.HTTPError as e:
         if e.response.status_code != 404:
             raise
-    _gh(token, "POST", f"/repos/{username}/{repo}/pages",
-        json={"source": {"branch": BRANCH, "path": "/"}})
+
+    _gh(
+        token,
+        "POST",
+        f"/repos/{username}/{repo}/pages",
+        json={"source": {"branch": BRANCH, "path": "/"}},
+    )
     return url
 
 
@@ -180,6 +201,7 @@ def update_index_in_folder2(values_data: dict) -> None:
 
 # ─── КЛЮЧОВА ФУНКЦІЯ: окремий репо для кожного замовлення ─────────────────────
 
+
 def deploy_folder2_for_order(
     values_data: dict | None = None,
     order_id: str | None = None,
@@ -192,10 +214,9 @@ def deploy_folder2_for_order(
     if not token:
         raise DeployError("GH_TOKEN_2 не встановлено")
 
-    username = _get_username(token, os.getenv("GH_USERNAME_2", "").strip() or None)
-    prefix = os.getenv("PAGES_REPO_2", "site2").strip()
+    username = _get_username(token, os.getenv("GH_USERNAME_2"))
+    prefix = os.getenv("PAGES_REPO_2", "").strip() or "site2"
 
-    # ★ Кожне замовлення = окремий репо
     repo_name = _make_repo_name(prefix, order_id)
     logger.info("Order %s -> new repo: %s/%s", order_id, username, repo_name)
 
@@ -211,6 +232,7 @@ def deploy_folder2_for_order(
 
 
 # ─── Зворотна сумісність (без order_id) ───────────────────────────────────────
+
 
 def deploy_folder2(values_data: dict | None = None) -> str:
     """Fallback: деплой без order_id (timestamp як назва репо)."""
@@ -231,8 +253,8 @@ def deploy_folder1() -> str:
     if not token:
         raise DeployError("PAGES_GH_TOKEN не встановлено")
 
-    username = _get_username(token, os.getenv("GH_USERNAME", "").strip() or None)
-    repo = os.getenv("PAGES_REPO_1", "diia-main-pages").strip()
+    username = _get_username(token, os.getenv("GH_USERNAME"))
+    repo = os.getenv("PAGES_REPO_1", "").strip() or "diia-main-pages"
 
     _ensure_repo(token, username, repo)
     _push_folder(token, username, repo, _collect_files(FOLDER1_DIR))
@@ -252,8 +274,7 @@ def run_full_chain(values_data: dict | None = None, order_id: str | None = None)
 
     Повертає dict з url та метаданими.
     """
-    token2 = os.getenv("GH_TOKEN_2", "").strip()
-    prefix = os.getenv("PAGES_REPO_2", "site2").strip()
+    prefix = os.getenv("PAGES_REPO_2", "").strip() or "site2"
     repo2_name = _make_repo_name(prefix, order_id)
 
     folder2_url = deploy_folder2_for_order(values_data=values_data, order_id=order_id)
