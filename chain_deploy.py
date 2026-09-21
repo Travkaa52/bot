@@ -1,22 +1,3 @@
-"""
-chain_deploy.py — v2: НОВИЙ РЕПО ДЛЯ КОЖНОГО ЗАМОВЛЕННЯ
-
-  1. Оновлює 2/index.html даними замовлення
-  2. Пушить папку 2/ у НОВИЙ репо: site2-<order_id> (GH_TOKEN_2)
-  3. Вмикає GitHub Pages в цьому новому репо
-  4. Генерує QR з URL → 1/assets/q.png
-  5. Пушить папку 1/ у ПОСТІЙНИЙ репо diia-main-pages (PAGES_GH_TOKEN)
-  6. Повертає обидва URL + назву репо
-
-Env vars:
-  GH_TOKEN_2      — токен іншого акаунта (repo+pages)
-  GH_USERNAME_2   — логін іншого акаунта (опційно)
-  PAGES_REPO_2    — prefix для назви репо (default: "site2")
-  PAGES_GH_TOKEN  — токен основного акаунта
-  GH_USERNAME     — логін основного акаунта (опційно)
-  PAGES_REPO_1    — назва репо для папки 1 (default: "diia-main-pages")
-"""
-
 from __future__ import annotations
 
 import base64
@@ -25,6 +6,7 @@ import os
 import pathlib
 import re
 import time
+import uuid
 from datetime import datetime
 
 import qrcode
@@ -72,33 +54,41 @@ def _get_username(token: str, override: str | None) -> str:
     return _gh(token, "GET", "/user")["login"]
 
 
-def _make_repo_name(prefix: str, order_id: str | None) -> str:
-    """Унікальна назва репо для кожного замовлення."""
+def _make_repo_name(prefix: str, order_id: str | int | None) -> str:
+    """Генерує УНІКАЛЬНЕ ім'я репо. Якщо ID порожній — додає унікальний UUID/Timestamp."""
     clean_prefix = (prefix or "site2").strip()
+    
+    # Додаємо мікросекунди / унікальний ідентифікатор, щоб ім'я НІКОЛИ не повторювалося
+    uid = uuid.uuid4().hex[:6]
+    ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+
     if order_id:
         safe_id = re.sub(r"[^a-zA-Z0-9_-]", "-", str(order_id))[:30]
-        name = f"{clean_prefix}-{safe_id}"
+        name = f"{clean_prefix}-{safe_id}-{uid}"
     else:
-        ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-        name = f"{clean_prefix}-{ts}"
+        name = f"{clean_prefix}-{ts}-{uid}"
+
     return name[:100]
 
 
-def _ensure_repo(token: str, username: str, repo_name: str) -> None:
+def _create_new_repo_strict(token: str, username: str, repo_name: str) -> None:
+    """Створює СВІЖИЙ репозиторій. Якщо такий вже існує — кидає DeployError."""
     if not repo_name or not repo_name.strip():
-        raise DeployError(f"Назва репозиторію порожня! (username={username}, repo_name={repo_name!r})")
+        raise DeployError(f"Назва репозиторію порожня!")
 
     repo_name = repo_name.strip()
 
+    # Перевіряємо, чи існує репо
     try:
         _gh(token, "GET", f"/repos/{username}/{repo_name}")
-        logger.info("Repo exists: %s/%s", username, repo_name)
-        return
+        # Якщо НЕ впало в 404 — значить репо ІСНУЄ!
+        raise DeployError(f"Репозиторій {username}/{repo_name} ВЖЕ ІСНУЄ! Перезапис заборонено.")
     except requests.HTTPError as e:
         if e.response.status_code != 404:
             raise
 
-    logger.info("Creating repository: %s/%s", username, repo_name)
+    # Створюємо новий
+    logger.info("Creating NEW repository: %s/%s", username, repo_name)
     _gh(
         token,
         "POST",
@@ -117,27 +107,12 @@ def _ensure_repo(token: str, username: str, repo_name: str) -> None:
     time.sleep(2)
 
 
-def _get_file_sha(token: str, username: str, repo: str, path: str) -> str | None:
-    try:
-        return _gh(
-            token,
-            "GET",
-            f"/repos/{username}/{repo}/contents/{path}",
-            params={"ref": BRANCH},
-        ).get("sha")
-    except requests.HTTPError:
-        return None
-
-
 def _push_file(token: str, username: str, repo: str, rel_path: str, content: bytes) -> None:
-    sha = _get_file_sha(token, username, repo, rel_path)
     payload = {
         "message": f"deploy: {rel_path}",
         "content": base64.b64encode(content).decode(),
         "branch": BRANCH,
     }
-    if sha:
-        payload["sha"] = sha
     _gh(token, "PUT", f"/repos/{username}/{repo}/contents/{rel_path}", json=payload)
 
 
@@ -157,13 +132,6 @@ def _collect_files(local_dir: str) -> dict[str, pathlib.Path]:
 
 def _enable_pages(token: str, username: str, repo: str) -> str:
     url = f"https://{username}.github.io/{repo}/"
-    try:
-        existing = _gh(token, "GET", f"/repos/{username}/{repo}/pages")
-        return existing.get("html_url", url)
-    except requests.HTTPError as e:
-        if e.response.status_code != 404:
-            raise
-
     _gh(
         token,
         "POST",
@@ -183,32 +151,32 @@ def _push_folder(
     overrides = overrides or {}
     logger.info("Pushing %d files to %s/%s", len(files), username, repo)
     for rel_path, abs_path in files.items():
+        # Всі файли беруться або з override, або з диска, НЕ змінюючи локальні файли
         content = overrides.get(rel_path, abs_path.read_bytes())
         _push_file(token, username, repo, rel_path, content)
 
 
-def update_index_in_folder2(values_data: dict) -> None:
+def get_rendered_index_content(values_data: dict) -> bytes:
+    """Підставляє значення в 2/index.html В ПАМ'ЯТІ, НЕ ТОРКАЮЧИСЬ диска."""
     index_path = pathlib.Path(FOLDER2_DIR) / INDEX_REL_PATH
     if not index_path.exists():
         logger.warning("2/index.html не знайдено")
-        return
+        return b""
+    
     content = index_path.read_text(encoding="utf-8")
     for key, val in values_data.items():
         content = content.replace(f"{{{{{key}}}}}", str(val))
-    index_path.write_text(content, encoding="utf-8")
-    logger.info("2/index.html оновлено (%d значень)", len(values_data))
-
-
-# ─── КЛЮЧОВА ФУНКЦІЯ: окремий репо для кожного замовлення ─────────────────────
+        
+    return content.encode("utf-8")
 
 
 def deploy_folder2_for_order(
     values_data: dict | None = None,
     order_id: str | None = None,
-) -> str:
+) -> tuple[str, str]:
     """
-    Деплоїть папку 2/ у НОВИЙ унікальний репо для кожного замовлення.
-    Назва репо: <PAGES_REPO_2>-<order_id>
+    Деплоїть папку 2/ у НОВИЙ унікальний репозиторій.
+    Повертає (url, repo_name)
     """
     token = os.getenv("GH_TOKEN_2", "").strip()
     if not token:
@@ -218,25 +186,23 @@ def deploy_folder2_for_order(
     prefix = os.getenv("PAGES_REPO_2", "").strip() or "site2"
 
     repo_name = _make_repo_name(prefix, order_id)
-    logger.info("Order %s -> new repo: %s/%s", order_id, username, repo_name)
+    logger.info("Order %s -> BRAND NEW repo: %s/%s", order_id, username, repo_name)
 
+    # 1. Готуємо змінений index.html в пам'яті (без запису на диск!)
+    overrides = {}
     if values_data:
-        update_index_in_folder2(values_data)
+        overrides[INDEX_REL_PATH] = get_rendered_index_content(values_data)
 
-    _ensure_repo(token, username, repo_name)
-    _push_folder(token, username, repo_name, _collect_files(FOLDER2_DIR))
+    # 2. Створюємо СТРОГО новий репо
+    _create_new_repo_strict(token, username, repo_name)
 
+    # 3. Завантажуємо файли
+    _push_folder(token, username, repo_name, _collect_files(FOLDER2_DIR), overrides=overrides)
+
+    # 4. Вмикаємо Pages
     url = _enable_pages(token, username, repo_name)
     logger.info("Order %s Pages URL: %s", order_id, url)
-    return url
-
-
-# ─── Зворотна сумісність (без order_id) ───────────────────────────────────────
-
-
-def deploy_folder2(values_data: dict | None = None) -> str:
-    """Fallback: деплой без order_id (timestamp як назва репо)."""
-    return deploy_folder2_for_order(values_data=values_data, order_id=None)
+    return url, repo_name
 
 
 def generate_qr(target_url: str) -> str:
@@ -248,7 +214,7 @@ def generate_qr(target_url: str) -> str:
 
 
 def deploy_folder1() -> str:
-    """Пушить папку 1/ в постійний репо (оновлює існуючий)."""
+    """Папка 1/ пушиться в постійний репо (тут оновлення дозволено)."""
     token = os.getenv("PAGES_GH_TOKEN", "").strip()
     if not token:
         raise DeployError("PAGES_GH_TOKEN не встановлено")
@@ -256,29 +222,34 @@ def deploy_folder1() -> str:
     username = _get_username(token, os.getenv("GH_USERNAME"))
     repo = os.getenv("PAGES_REPO_1", "").strip() or "diia-main-pages"
 
-    _ensure_repo(token, username, repo)
+    # Для папки 1 репо може існувати, тому просто пушимо
+    try:
+        _gh(token, "GET", f"/repos/{username}/{repo}")
+    except requests.HTTPError as e:
+        if e.response.status_code == 404:
+            _gh(
+                token,
+                "POST",
+                "/user/repos",
+                json={"name": repo, "private": False, "auto_init": False},
+            )
+
     _push_folder(token, username, repo, _collect_files(FOLDER1_DIR))
 
-    url = _enable_pages(token, username, repo)
-    logger.info("Folder1 Pages URL: %s", url)
-    return url
+    try:
+        return _gh(token, "GET", f"/repos/{username}/{repo}/pages").get("html_url")
+    except requests.HTTPError:
+        return _enable_pages(token, username, repo)
 
 
 def run_full_chain(values_data: dict | None = None, order_id: str | None = None) -> dict:
-    """
-    Повний ланцюжок v2:
-      1. Оновлює 2/index.html
-      2. Деплоїть папку 2/ в НОВИЙ репо site2-<order_id>
-      3. Генерує QR
-      4. Деплоїть папку 1/ в постійний репо
-
-    Повертає dict з url та метаданими.
-    """
-    prefix = os.getenv("PAGES_REPO_2", "").strip() or "site2"
-    repo2_name = _make_repo_name(prefix, order_id)
-
-    folder2_url = deploy_folder2_for_order(values_data=values_data, order_id=order_id)
+    # 1. Деплоїмо в НОВИЙ репо папки 2
+    folder2_url, repo2_name = deploy_folder2_for_order(values_data=values_data, order_id=order_id)
+    
+    # 2. Генеруємо QR для основного сайту
     qr_path = generate_qr(folder2_url)
+    
+    # 3. Оновлюємо постійний репо (папку 1)
     folder1_url = deploy_folder1()
 
     return {
