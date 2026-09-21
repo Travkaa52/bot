@@ -2551,7 +2551,7 @@ def main():
         USERS_KEY:    {"load": _db.load_users,    "save": _db.save_users},
         ORDERS_KEY:   {"load": _db.load_orders,   "save": _db.save_orders},
         FEEDBACK_KEY: {"load": _db.load_feedback, "save": _db.save_feedback},
-        TARIFFS_KEY:  {"load": _db.load_tariffs,  "save": _db.save_tariffs},
+        TARIFFS_KEY: {"load": _db.load_tariffs_db, "save": _db.save_tariffs_db},
         PROMOS_KEY:   {"load": _db.load_promos,   "save": _db.save_promos},
         SETTINGS_KEY: {"load": _db.load_settings, "save": _db.save_settings},
     }
