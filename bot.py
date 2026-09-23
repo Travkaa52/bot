@@ -1,14 +1,14 @@
 """
-FunsDiia Bot — З можливістю редагування кабінету користувачем
+FunsDiia Bot — Преміум версія з керуванням даними у Профілі
 ────────────────────────────────────────────────────────────
-Збирає дані користувача → оновлює index в папці 2 →
-пушить папку 2 на GitHub → отримує URL → генерує QR →
-кладе QR у 1/assets/q.png → пушить папку 1.
+Збирає дані користувача → зберігає в Профілі → оновлює values.js →
+пушить на GitHub через chain_deploy → генерує QR → дає посилання.
 
-Нові можливості:
-1. Користувачі можуть редагувати всі свої дані у розділі "Мої замовлення".
-2. Оновлення даних та фото з можливістю повторного деплою кабінету.
-3. Повністю асинхронні I/O-операції через asyncio.to_thread.
+Основні зміни:
+1. Повне управління персональними даними (ПІБ, ДН, Стать, Адреса, Документи, Фото) у розділі "Профіль".
+2. Миттєвий передеплой кабінету з розділу "Профіль".
+3. Очищений та зручний розділ "Мої замовлення".
+4. Преміальний UI/UX дизайн з високою наочністю та зручними перемикачами.
 """
 
 import asyncio
@@ -94,7 +94,7 @@ logger = logging.getLogger(__name__)
     AWAIT_REJECT_REASON,
     AWAIT_TARIFF_EDIT_PRICE, AWAIT_TARIFF_EDIT_NAME, AWAIT_TARIFF_EDIT_EMOJI,
     AWAIT_WELCOME_TEXT,
-    EDIT_ORDER_INPUT_VALUE, EDIT_ORDER_AWAIT_PHOTO,
+    EDIT_PROFILE_INPUT_VALUE, EDIT_PROFILE_AWAIT_PHOTO,
 ) = range(30)
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
@@ -628,6 +628,52 @@ async def notify_group_photo(bot, photo_bytes: bytes, caption: str, kb=None):
         logger.error("notify_group_photo: %s", e)
 
 
+# ── User Profile Helper Functions ──────────────────────────────────────────────
+
+async def get_latest_order_for_user(uid: str) -> tuple[Optional[str], Optional[dict]]:
+    orders = await async_load(ORDERS_KEY, {})
+    my_orders = sorted(
+        [(oid, o) for oid, o in orders.items() if o.get("user_id") == uid],
+        key=lambda x: x[1].get("created_at", ""), reverse=True,
+    )
+    if not my_orders:
+        return None, None
+    return my_orders[0]
+
+
+async def sync_profile_to_latest_order(uid: str, user_profile: dict):
+    orders = await async_load(ORDERS_KEY, {})
+    oid, last_order = await get_latest_order_for_user(uid)
+    if not oid or not last_order:
+        return
+
+    vd = last_order.get("values_data", {})
+    vd["fio"] = user_profile.get("doc_fio", vd.get("fio", ""))
+    vd["fio_en"] = user_profile.get("doc_fio_en", vd.get("fio_en", ""))
+    vd["birth"] = user_profile.get("doc_dob", vd.get("birth", ""))
+    
+    sex = user_profile.get("doc_sex", "Ч")
+    vd["sex"] = sex
+    vd["sex_en"] = "M" if sex in ("Ч", "M") else "W"
+
+    vd["bank_adress"] = user_profile.get("doc_address", vd.get("bank_adress", ""))
+    vd["isRightsEnabled"] = user_profile.get("doc_is_rights", vd.get("isRightsEnabled", True))
+    vd["isZagranEnabled"] = user_profile.get("doc_is_zagran", vd.get("isZagranEnabled", True))
+    
+    val_dip = user_profile.get("doc_is_diploma", vd.get("isDiplomaEnabled", False))
+    vd["isDiplomaEnabled"] = val_dip
+    vd["isStudyEnabled"] = val_dip
+
+    last_order["values_data"] = vd
+    last_order["js_content"] = values_to_js(vd)
+    
+    if user_profile.get("doc_photo_path"):
+        last_order["photo_path"] = user_profile["doc_photo_path"]
+
+    orders[oid] = last_order
+    await async_save(ORDERS_KEY, orders)
+
+
 # ── Command Handlers ───────────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -654,6 +700,16 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "total_orders":0,
             "banned":      False,
             "vip":         False,
+            # Поля документів у Профілі
+            "doc_fio":        update.effective_user.first_name or "",
+            "doc_fio_en":     "",
+            "doc_dob":        "01.01.2000",
+            "doc_sex":        "Ч",
+            "doc_address":    "м. Харків, вул. Сумська, 1",
+            "doc_is_rights":  True,
+            "doc_is_zagran":  True,
+            "doc_is_diploma": False,
+            "doc_photo_path": "",
         }
         await async_save(USERS_KEY, users)
         log_action("new_user", uid, {"ref_by": ref_by})
@@ -681,13 +737,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bal_line = f"\n💰 Баланс: <b>{bal}₴</b>" if bal > 0 else ""
     welcome = settings.get("welcome_text") or (
         f"👋 <b>{esc(update.effective_user.first_name)}{vip}</b>{bal_line}\n\n"
-        "🪪 <b>FunsDiia</b> — генерація документів швидко.\n⚡️ Готово за 10 хвилин."
+        "🪪 <b>FunsDiia</b> — швидка генерація та керування документами.\n"
+        "⚡️ Ваш інтерактивний кабінет готовий за лічені хвилини."
     )
 
     kb_rows = [
-        [InlineKeyboardButton("🛒 Замовити", callback_data="catalog")],
-        [InlineKeyboardButton("📂 Мої замовлення", callback_data="my_orders"),
-         InlineKeyboardButton("👤 Профіль", callback_data="profile")],
+        [InlineKeyboardButton("🛒 Замовити тариф", callback_data="catalog")],
+        [InlineKeyboardButton("👤 Профіль та Дані", callback_data="profile"),
+         InlineKeyboardButton("📂 Мої замовлення", callback_data="my_orders")],
         [InlineKeyboardButton("🎟 Промо-код", callback_data="promo_enter"),
          InlineKeyboardButton("👥 Реферали", callback_data="ref_menu")],
         [InlineKeyboardButton("💬 Підтримка", callback_data="feedback"),
@@ -702,30 +759,200 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
 
 
-# ── Profile / Orders / Catalog Handlers ────────────────────────────────────────
+# ── Profile Management (Central Data Hub) ──────────────────────────────────────
 
 async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     uid = str(q.from_user.id)
     users = await async_load(USERS_KEY, {})
     u = users.get(uid, {})
-    orders = await async_load(ORDERS_KEY, {})
-    my = [o for o in orders.values() if o.get("user_id") == uid]
-    done = sum(1 for o in my if o.get("status") in ("completed", "deployed"))
+
+    oid, last_order = await get_latest_order_for_user(uid)
+    
+    fio = u.get("doc_fio") or (last_order.get("values_data", {}).get("fio") if last_order else "Не вказано")
+    dob = u.get("doc_dob") or (last_order.get("values_data", {}).get("birth") if last_order else "Не вказано")
+    sex = "Чоловік ♂️" if u.get("doc_sex", "Ч") in ("Ч", "M") else "Жінка ♀️"
+    addr = u.get("doc_address") or (last_order.get("values_data", {}).get("bank_adress") if last_order else "Не вказано")
+    
+    r = "✅ Увімкнено" if u.get("doc_is_rights", True) else "❌ Вимкнено"
+    z = "✅ Увімкнено" if u.get("doc_is_zagran", True) else "❌ Вимкнено"
+    d = "✅ Увімкнено" if u.get("doc_is_diploma", False) else "❌ Вимкнено"
+    photo_st = "✅ Завантажено" if (u.get("doc_photo_path") or (last_order and last_order.get("photo_path"))) else "❌ Відсутнє"
+
     ref_link = f"https://t.me/{BOT_USERNAME}?start={uid}"
     vip_label = "👑 VIP" if u.get("vip") else "👤 Стандарт"
-    text = (
-        f"👤 <b>{esc(u.get('first_name', 'Профіль'))}</b>  {vip_label}\n"
-        f"🆔 <code>{uid}</code>\n\n"
-        f"💰 Баланс: <b>{u.get('balance', 0)}₴</b>  ·  👥 Рефералів: <b>{u.get('ref_count', 0)}</b>\n"
-        f"📦 Замовлень: <b>{len(my)}</b>  ·  ✅ Виконано: <b>{done}</b>\n\n"
-        f"🔗 Реф. посилання:\n<code>{ref_link}</code>"
-    )
-    await safe_edit(q, text, mkb(
-        [InlineKeyboardButton("💸 Вивести", callback_data="withdraw")],
-        back_btn("home"),
-    ), disable_web_page_preview=True)
 
+    pages_url = last_order.get("pages_url") if last_order else None
+    cabinet_status = ""
+    if pages_url:
+        cabinet_status = f"\n🌐 <b>Активний сайт:</b> <a href='{pages_url}'>Відкрити кабінет</a>"
+
+    text = (
+        f"👤 <b>ОСОБИСТИЙ КАБІНЕТ & ПРОФІЛЬ</b>  [{vip_label}]\n"
+        f"────────────────────────────\n"
+        f"🆔 <b>ID:</b> <code>{uid}</code>\n"
+        f"💰 <b>Баланс:</b> <code>{u.get('balance', 0)}₴</code>\n"
+        f"👥 <b>Рефералів:</b> <code>{u.get('ref_count', 0)}</code>{cabinet_status}\n\n"
+        f"📋 <b>ПЕРСОНАЛЬНІ ДАНІ ДОКУМЕНТІВ:</b>\n"
+        f"▫️ <b>ПІБ:</b> {esc(fio)}\n"
+        f"▫️ <b>Дата народження:</b> {esc(dob)}\n"
+        f"▫️ <b>Стать:</b> {sex}\n"
+        f"▫️ <b>Адреса:</b> {esc(addr)}\n"
+        f"▫️ <b>Водійські права:</b> {r}\n"
+        f"▫️ <b>Закордонний паспорт:</b> {z}\n"
+        f"▫️ <b>Диплом / Студентський:</b> {d}\n"
+        f"▫️ <b>Фото 3x4:</b> {photo_st}\n\n"
+        f"🔗 <b>Ваше реферальне посилання:</b>\n<code>{ref_link}</code>"
+    )
+
+    kb_rows = [
+        [InlineKeyboardButton("✏️ Редагувати дані документа", callback_data="profile_edit_menu")],
+    ]
+    if pages_url and last_order.get("status") in ("deployed", "completed", "approved"):
+        kb_rows.append([InlineKeyboardButton("🚀 Застосувати зміни та оновити сайт", callback_data="profile_redeploy")])
+    
+    kb_rows.extend([
+        [InlineKeyboardButton("💸 Вивести кошти", callback_data="withdraw"),
+         InlineKeyboardButton("👥 Реферали", callback_data="ref_menu")],
+        back_btn("home")
+    ])
+
+    await safe_edit(q, text, InlineKeyboardMarkup(kb_rows), disable_web_page_preview=True)
+
+
+async def profile_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = str(q.from_user.id)
+    users = await async_load(USERS_KEY, {})
+    u = users.get(uid, {})
+
+    sex = "Чоловік ♂️" if u.get("doc_sex", "Ч") in ("Ч", "M") else "Жінка ♀️"
+    r = "✅ Так" if u.get("doc_is_rights", True) else "❌ Ні"
+    z = "✅ Так" if u.get("doc_is_zagran", True) else "❌ Ні"
+    d = "✅ Так" if u.get("doc_is_diploma", False) else "❌ Ні"
+
+    text = (
+        f"✏️ <b>РЕДАГУВАННЯ ДАНИХ ДОКУМЕНТА</b>\n"
+        f"────────────────────────────\n"
+        f"Оберіть пункт, який бажаєте змінити.\n"
+        f"Всі внесені зміни автоматично зберігаються в профілі та за стосуванням оновлюють ваш сайт.\n\n"
+        f"📝 <b>ПІБ:</b> {esc(u.get('doc_fio', '—'))}\n"
+        f"📅 <b>ДН:</b> {esc(u.get('doc_dob', '—'))}\n"
+        f"👤 <b>Стать:</b> {sex}\n"
+        f"🏠 <b>Адреса:</b> {esc(u.get('doc_address', '—'))}\n"
+        f"🚗 <b>Права:</b> {r}\n"
+        f"🌍 <b>Загран:</b> {z}\n"
+        f"🎓 <b>Диплом:</b> {d}"
+    )
+
+    kb_rows = [
+        [InlineKeyboardButton("📝 Змінити ПІБ", callback_data="p_edit:fio"),
+         InlineKeyboardButton("📅 Змінити ДН", callback_data="p_edit:dob")],
+        [InlineKeyboardButton(f"👤 Стать: {sex}", callback_data="p_toggle:sex"),
+         InlineKeyboardButton("🏠 Змінити адресу", callback_data="p_edit:addr")],
+        [InlineKeyboardButton(f"🚗 Права: {r}", callback_data="p_toggle:rights"),
+         InlineKeyboardButton(f"🌍 Загран: {z}", callback_data="p_toggle:zagran")],
+        [InlineKeyboardButton(f"🎓 Диплом: {d}", callback_data="p_toggle:diploma")],
+        [InlineKeyboardButton("📸 Оновити фото 3×4", callback_data="p_edit:photo")],
+        [InlineKeyboardButton("🚀 Застосувати та оновити сайт", callback_data="profile_redeploy")],
+        [InlineKeyboardButton("🔙 Повернутися до профілю", callback_data="profile")],
+    ]
+
+    await safe_edit(q, text, InlineKeyboardMarkup(kb_rows))
+
+
+async def profile_toggle_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = str(q.from_user.id)
+    parts = q.data.split(":")
+    if len(parts) < 2: return
+    field = parts[1]
+
+    users = await async_load(USERS_KEY, {})
+    u = users.get(uid, {})
+
+    if field == "sex":
+        curr = u.get("doc_sex", "Ч")
+        u["doc_sex"] = "Ж" if curr in ("Ч", "M") else "Ч"
+    elif field == "rights":
+        u["doc_is_rights"] = not u.get("doc_is_rights", True)
+    elif field == "zagran":
+        u["doc_is_zagran"] = not u.get("doc_is_zagran", True)
+    elif field == "diploma":
+        u["doc_is_diploma"] = not u.get("doc_is_diploma", False)
+
+    await async_save(USERS_KEY, users)
+    await sync_profile_to_latest_order(uid, u)
+    await profile_edit_menu(update, context)
+
+
+async def profile_input_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = str(q.from_user.id)
+    parts = q.data.split(":")
+    if len(parts) < 2: return
+    field = parts[1]
+
+    context.user_data["edit_profile_field"] = field
+
+    prompts = {
+        "fio": "📝 Введіть новий **ПІБ** (українською мовою):\n<i>Приклад: Петренко Петро Петрович</i>",
+        "dob": "📅 Введіть нову **дату народження**:\n<i>Формат: ДД.ММ.РРРР (наприклад, 15.05.1998)</i>",
+        "addr": "🏠 Введіть нову **адресу прописки**:\n<i>Приклад: м. Київ, вул. Хрещатик, буд. 1, кв. 10</i>",
+        "photo": "📸 Надішліть **нове фото 3×4** (портрет на світлому фоні):",
+    }
+
+    if field == "photo":
+        context.user_data["state"] = EDIT_PROFILE_AWAIT_PHOTO
+    else:
+        context.user_data["state"] = EDIT_PROFILE_INPUT_VALUE
+
+    await safe_edit(q, prompts.get(field, "Введіть нове значення:"), mkb([InlineKeyboardButton("❌ Скасувати", callback_data="profile_edit_menu")]))
+
+
+async def profile_redeploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = str(q.from_user.id)
+
+    oid, last_order = await get_latest_order_for_user(uid)
+    if not oid or not last_order:
+        await q.answer("❌ У вас немає активних замовлень для деплою.", show_alert=True)
+        return
+
+    if last_order.get("status") not in ("deployed", "completed", "approved"):
+        await q.answer("⚠️ Ваше замовлення ще очікує підтвердження оплати.", show_alert=True)
+        return
+
+    await safe_edit(q, "🚀 <b>Оновлюємо ваш сайт кабінету...</b>\n⏳ Зачекайте 30–60 секунд.")
+
+    try:
+        folder1_url = await _run_chain_deploy(oid, last_order)
+
+        orders = await async_load(ORDERS_KEY, {})
+        orders[oid]["pages_url"] = folder1_url
+        orders[oid]["updated_at"] = now_str()
+        await async_save(ORDERS_KEY, orders)
+
+        log_action("user_profile_redeploy", uid, {"oid": oid, "url": folder1_url})
+
+        await safe_edit(q,
+            f"🎉 <b>Кабінет успішно оновлено!</b>\n\n"
+            f"🔗 <a href='{folder1_url}'>Ваш оновлений кабінет</a>\n\n"
+            f"⏱ <i>Зміни з'являться на сайті протягом 1–2 хвилин.</i>",
+            mkb([InlineKeyboardButton("🔗 Відкрити кабінет", url=folder1_url)],
+                [InlineKeyboardButton("👤 Повернутися до профілю", callback_data="profile")]),
+            disable_web_page_preview=True
+        )
+    except Exception as e:
+        logger.error("User profile redeploy error [%s]: %s", oid, e, exc_info=True)
+        await safe_edit(q,
+            f"❌ <b>Помилка оновлення кабінету.</b>\n\n<code>{esc(str(e)[:300])}</code>",
+            mkb([InlineKeyboardButton("🔄 Спробувати знову", callback_data="profile_redeploy")],
+                back_btn("profile"))
+        )
+
+
+# ── Orders Section (View Only) ─────────────────────────────────────────────────
 
 async def my_orders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -737,22 +964,20 @@ async def my_orders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         key=lambda x: x[1].get("created_at", ""), reverse=True,
     )
     if not my:
-        await safe_edit(q, "📭 <b>Замовлень ще немає.</b>\n\nОберіть тариф у каталозі!",
-                        mkb(back_btn("home")))
+        await safe_edit(q, "📭 <b>У вас ще немає замовлень.</b>\n\nОберіть бажаний тариф у каталозі!",
+                        mkb([InlineKeyboardButton("🛒 Перейти до каталогу", callback_data="catalog")], back_btn("home")))
         return
-    status_map = {"pending":"⏳","approved":"✅","completed":"🎉","rejected":"❌","deployed":"🌐","expired":"🔴"}
-    text = "📂 <b>Ваші замовлення</b>\n\nОберіть замовлення для перегляду та керування кабінетом:\n\n"
+    status_map = {"pending":"⏳ Обробка","approved":"✅ Сплачено","completed":"🎉 Готово","rejected":"❌ Відхилено","deployed":"🌐 Активний","expired":"🔴 Прострочено"}
+    text = "📂 <b>ІСТОРІЯ ЗАМОВЛЕНЬ</b>\n────────────────────────────\nНатисніть на замовлення для перегляду деталей:\n\n"
     kb_rows = []
     for oid, o in my[:10]:
         st = status_map.get(o.get("status", ""), "·")
         t_name = tariffs.get(o.get("tariff", ""), {}).get("name", o.get("tariff", "?"))
-        btn_text = f"{st} #{oid} · {esc(t_name)}"
+        btn_text = f"{st} | #{oid} ({esc(t_name)})"
         kb_rows.append([InlineKeyboardButton(btn_text, callback_data=f"user_ord_view:{oid}")])
     kb_rows.append(back_btn("home"))
     await safe_edit(q, text, InlineKeyboardMarkup(kb_rows))
 
-
-# ── User Order Management & Cabinet Editing ─────────────────────────────────────
 
 async def user_ord_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -767,204 +992,41 @@ async def user_ord_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("❌ Замовлення не знайдено", show_alert=True)
         return
 
-    status_map = {"pending":"⏳","approved":"✅","completed":"🎉","rejected":"❌","deployed":"🌐","expired":"🔴"}
+    status_map = {"pending":"⏳ В обробці","approved":"✅ Оплачено","completed":"🎉 Виконано","rejected":"❌ Відхилено","deployed":"🌐 Активний","expired":"🔴 Прострочено"}
     st = status_map.get(o.get("status",""), o.get("status","?"))
     url = esc(o.get("pages_url", ""))
-    pages_line = f"\n🔗 <a href='{url}'>Відкрити кабінет</a>" if url else ""
+    pages_line = f"\n🔗 <b>Посилання:</b> <a href='{url}'>Відкрити кабінет</a>" if url else ""
 
-    vd = o.get("values_data", {})
-    fio = o.get("fio") or vd.get("fio", "—")
-    dob = o.get("dob") or vd.get("birth", "—")
+    sub_end = o.get("subscription_end")
+    sub_line = f"\n📅 <b>Підписка дійсна до:</b> {datetime.fromisoformat(sub_end).strftime('%d.%m.%Y')}" if sub_end else "\n♾ <b>Підписка:</b> Безстрокова"
 
     text = (
-        f"📦 <b>Замовлення #{esc(oid)}</b>  {st}\n"
-        f"💎 Тариф: <b>{esc(o.get('tariff_name','?'))}</b>\n"
-        f"📝 ПІБ: <b>{esc(fio)}</b>\n"
-        f"📅 ДН: <b>{esc(dob)}</b>{pages_line}\n\n"
-        f"💡 <i>Ви можете відредагувати свої дані та оновити кабінет у будь-який час.</i>"
+        f"📦 <b>ЗАМОВЛЕННЯ #{esc(oid)}</b>\n"
+        f"────────────────────────────\n"
+        f"📊 <b>Статус:</b> {st}\n"
+        f"💎 <b>Тариф:</b> {esc(o.get('tariff_name','?'))}\n"
+        f"💰 <b>Сума:</b> {o.get('final_price','?')}₴{sub_line}{pages_line}\n\n"
+        f"💡 <i>Для зміни даних документа (ПІБ, Фото тощо) скористайтесь розділом 👤 <b>Профіль</b>.</i>"
     )
 
     kb_rows = []
     if url:
         kb_rows.append([InlineKeyboardButton("🔗 Відкрити кабінет", url=o["pages_url"])])
-    if o.get("status") in ("deployed", "completed", "approved"):
-        kb_rows.append([InlineKeyboardButton("✏️ Редагувати дані кабінету", callback_data=f"edit_ord:{oid}")])
+    kb_rows.append([InlineKeyboardButton("✏️ Змінити дані у профілі", callback_data="profile_edit_menu")])
     kb_rows.append(back_btn("my_orders"))
 
     await safe_edit(q, text, InlineKeyboardMarkup(kb_rows), disable_web_page_preview=True)
 
 
-async def edit_ord_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    uid = str(q.from_user.id)
-    parts = q.data.split(":")
-    if len(parts) < 2: return
-    oid = parts[1]
-
-    orders = await async_load(ORDERS_KEY, {})
-    o = orders.get(oid)
-    if not o or o.get("user_id") != uid:
-        await q.answer("❌ Немає доступу", show_alert=True)
-        return
-
-    vd = o.get("values_data", {})
-    fio = vd.get("fio", o.get("fio", "—"))
-    dob = vd.get("birth", o.get("dob", "—"))
-    sex = "Чоловік ♂️" if vd.get("sex") in ("Ч", "M") else "Жінка ♀️"
-    addr = vd.get("bank_adress", o.get("address", "—"))
-    r = "✅ Так" if vd.get("isRightsEnabled", True) else "❌ Ні"
-    z = "✅ Так" if vd.get("isZagranEnabled", True) else "❌ Ні"
-    d = "✅ Так" if vd.get("isDiplomaEnabled", False) else "❌ Ні"
-
-    text = (
-        f"✏️ <b>Редагування кабінету #{esc(oid)}</b>\n\n"
-        f"📝 <b>ПІБ:</b> {esc(fio)}\n"
-        f"📅 <b>ДН:</b> {esc(dob)}\n"
-        f"👤 <b>Стать:</b> {sex}\n"
-        f"🏠 <b>Адреса:</b> {esc(addr)}\n"
-        f"🚗 <b>Права:</b> {r}\n"
-        f"🌍 <b>Загран:</b> {z}\n"
-        f"🎓 <b>Диплом:</b> {d}\n\n"
-        f"<i>Оберіть потрібний пункт для зміни. Після внесення змін натисніть 🚀 <b>Застосувати та оновити сайт</b>.</i>"
-    )
-
-    kb_rows = [
-        [InlineKeyboardButton("📝 Змінити ПІБ", callback_data=f"e_fio:{oid}"),
-         InlineKeyboardButton("📅 Змінити ДН", callback_data=f"e_dob:{oid}")],
-        [InlineKeyboardButton(f"👤 Стать: {sex}", callback_data=f"e_sex:{oid}"),
-         InlineKeyboardButton("🏠 Адреса", callback_data=f"e_addr:{oid}")],
-        [InlineKeyboardButton(f"🚗 Права: {r}", callback_data=f"e_rights:{oid}"),
-         InlineKeyboardButton(f"🌍 Загран: {z}", callback_data=f"e_zagran:{oid}")],
-        [InlineKeyboardButton(f"🎓 Диплом: {d}", callback_data=f"e_diploma:{oid}")],
-        [InlineKeyboardButton("📸 Оновити фото 3×4", callback_data=f"e_photo:{oid}")],
-        [InlineKeyboardButton("🚀 Застосувати та оновити сайт", callback_data=f"e_apply:{oid}")],
-        [InlineKeyboardButton("🔙 Назад до замовлення", callback_data=f"user_ord_view:{oid}")],
-    ]
-
-    await safe_edit(q, text, InlineKeyboardMarkup(kb_rows))
-
-
-async def edit_ord_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    uid = str(q.from_user.id)
-    parts = q.data.split(":")
-    if len(parts) < 2: return
-    action, oid = parts[0], parts[1]
-
-    orders = await async_load(ORDERS_KEY, {})
-    o = orders.get(oid)
-    if not o or o.get("user_id") != uid:
-        await q.answer("❌ Немає доступу", show_alert=True)
-        return
-
-    vd = o.setdefault("values_data", gen_values_dict(o))
-
-    if action == "e_sex":
-        current_sex = vd.get("sex", "Ч")
-        new_sex = "Ж" if current_sex in ("Ч", "M") else "Ч"
-        vd["sex"] = new_sex
-        vd["sex_en"] = "W" if new_sex == "Ж" else "M"
-        o["sex"] = "W" if new_sex == "Ж" else "M"
-    elif action == "e_rights":
-        vd["isRightsEnabled"] = not vd.get("isRightsEnabled", True)
-        o["is_rights"] = vd["isRightsEnabled"]
-    elif action == "e_zagran":
-        vd["isZagranEnabled"] = not vd.get("isZagranEnabled", True)
-        o["is_zagran"] = vd["isZagranEnabled"]
-    elif action == "e_diploma":
-        val = not vd.get("isDiplomaEnabled", False)
-        vd["isDiplomaEnabled"] = val
-        vd["isStudyEnabled"] = val
-        o["is_diploma"] = val
-        o["is_study"] = val
-
-    o["values_data"] = vd
-    o["js_content"] = values_to_js(vd)
-    await async_save(ORDERS_KEY, orders)
-
-    await edit_ord_menu(update, context)
-
-
-async def edit_ord_input_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    uid = str(q.from_user.id)
-    parts = q.data.split(":")
-    if len(parts) < 2: return
-    action, oid = parts[0], parts[1]
-
-    orders = await async_load(ORDERS_KEY, {})
-    o = orders.get(oid)
-    if not o or o.get("user_id") != uid:
-        await q.answer("❌ Немає доступу", show_alert=True)
-        return
-
-    context.user_data["edit_oid"] = oid
-    context.user_data["edit_field"] = action
-
-    prompts = {
-        "e_fio": "📝 Введіть новий **ПІБ** (українською):",
-        "e_dob": "📅 Введіть нову **дату народження** (ДД.ММ.РРРР):",
-        "e_addr": "🏠 Введіть нову **адресу прописки**:",
-        "e_photo": "📸 Надішліть **нове фото 3×4** (обличчя на світлому фоні):",
-    }
-
-    if action == "e_photo":
-        context.user_data["state"] = EDIT_ORDER_AWAIT_PHOTO
-    else:
-        context.user_data["state"] = EDIT_ORDER_INPUT_VALUE
-
-    await safe_edit(q, prompts.get(action, "Введіть нове значення:"), mkb([InlineKeyboardButton("❌ Скасувати", callback_data=f"edit_ord:{oid}")]))
-
-
-async def edit_ord_apply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    uid = str(q.from_user.id)
-    parts = q.data.split(":")
-    if len(parts) < 2: return
-    oid = parts[1]
-
-    orders = await async_load(ORDERS_KEY, {})
-    o = orders.get(oid)
-    if not o or o.get("user_id") != uid:
-        await q.answer("❌ Немає доступу", show_alert=True)
-        return
-
-    await safe_edit(q, "🚀 <b>Оновлюємо ваш кабінет...</b>\nЦе може зайняти 30–60 секунд.")
-
-    try:
-        folder1_url = await _run_chain_deploy(oid, o)
-
-        orders = await async_load(ORDERS_KEY, {})
-        orders[oid]["pages_url"] = folder1_url
-        orders[oid]["updated_at"] = now_str()
-        await async_save(ORDERS_KEY, orders)
-
-        log_action("user_redeploy", uid, {"oid": oid, "url": folder1_url})
-
-        await safe_edit(q,
-            f"🎉 <b>Кабінет успішно оновлено!</b>\n\n"
-            f"🔗 <a href='{folder1_url}'>Ваш оновлений сайт</a>\n\n"
-            f"⏱ <i>Зміни відобразяться протягом 1–2 хвилин.</i>",
-            mkb([InlineKeyboardButton("🔗 Відкрити кабінет", url=folder1_url)],
-                [InlineKeyboardButton("🔙 Повернутися до замовлень", callback_data="my_orders")]),
-            disable_web_page_preview=True
-        )
-    except Exception as e:
-        logger.error("User redeploy error [%s]: %s", oid, e, exc_info=True)
-        await safe_edit(q,
-            f"❌ <b>Помилка оновлення кабінету.</b>\n\n<code>{esc(str(e)[:300])}</code>",
-            mkb([InlineKeyboardButton("🔄 Спробувати знову", callback_data=f"e_apply:{oid}")],
-                back_btn("my_orders"))
-        )
-
+# ── Catalog & Purchase Flow Handlers ───────────────────────────────────────────
 
 async def show_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     tariffs = await active_tariffs()
-    text = "🛒 <b>Оберіть тариф</b>\n\n"
+    text = "🛒 <b>ОБЕРІТЬ ТАРИФ ПІДПИСКИ</b>\n────────────────────────────\n\n"
     for k, t in tariffs.items():
         d = "∞ безстроково" if not t.get("days") else f"{t['days']} дн."
-        text += f"{t.get('emoji','📦')} <b>{esc(t.get('name'))}</b> — <b>{t.get('price')}₴</b>  <i>({d})</i>\n"
+        text += f"{t.get('emoji','📦')} <b>{esc(t.get('name'))}</b> — <b>{t.get('price')}₴</b> <i>({d})</i>\n"
     kb_rows = [
         [InlineKeyboardButton(f"{t.get('emoji','📦')} {t.get('name')} — {t.get('price')}₴",
                               callback_data=f"tar:{k}")]
@@ -979,11 +1041,10 @@ async def select_tariff(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(q.from_user.id)
     new_enabled = await get_setting("new_orders_enabled")
     if not new_enabled and not is_admin(uid):
-        await q.answer("❌ Прийом замовлень призупинено", show_alert=True)
+        await q.answer("❌ Прийом замовлень тимчасово призупинено", show_alert=True)
         return
     parts = q.data.split(":")
-    if len(parts) < 2:
-        return
+    if len(parts) < 2: return
     key = parts[1]
     tariffs = await active_tariffs()
     if key not in tariffs:
@@ -993,21 +1054,18 @@ async def select_tariff(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.update({"tariff": key, "tariff_name": t.get("name"),
                                "tariff_price": t.get("price"), "state": AWAIT_FIO})
     await safe_edit(q,
-        f"{t.get('emoji','📦')} <b>{esc(t.get('name'))}</b> — {t.get('price')}₴\n\n"
-        "📝 <b>Крок 1/7</b> — Введіть ПІБ українською:\n<i>Приклад: Іванов Іван Іванович</i>",
+        f"{t.get('emoji','📦')} <b>Тариф: {esc(t.get('name'))}</b> — {t.get('price')}₴\n\n"
+        "📝 <b>Крок 1/7</b> — Введіть ПІБ українською мовою:\n<i>Приклад: Шевченко Тарас Григорович</i>",
     )
 
-
-# ── Questionnaire Flow Handlers ────────────────────────────────────────────────
 
 async def select_sex(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     if not context.user_data or context.user_data.get("state") != AWAIT_SEX:
-        await safe_edit(q, "⚠️ Сесію вичерпано. Почніть знову через /start", mkb(back_btn("home")))
+        await safe_edit(q, "⚠️ Сесію вичерпано. Почніть спочатку через /start", mkb(back_btn("home")))
         return
     parts = q.data.split(":")
-    if len(parts) < 2:
-        return
+    if len(parts) < 2: return
     context.user_data["sex"] = parts[1]
     context.user_data["state"] = AWAIT_ADDRESS
     sex_text = "Чоловік ♂️" if context.user_data["sex"] == "M" else "Жінка ♀️"
@@ -1015,14 +1073,14 @@ async def select_sex(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ Стать: <b>{sex_text}</b>\n\n"
         "🏠 <b>Крок 4/7</b> — Адреса прописки\n"
         "<i>Приклад: м. Харків, вул. Сумська, 5, кв. 12</i>\n"
-        "<i>Або /skip для автогенерації</i>",
+        "<i>Або надішліть /skip для автогенерації</i>",
     )
 
 
 async def _ask_rights(update, context):
     kb = mkb([InlineKeyboardButton("✅ Так", callback_data="rights:yes"),
                InlineKeyboardButton("❌ Ні",  callback_data="rights:no")])
-    text = "🚗 <b>Крок 5/7</b> — Є водійські права?"
+    text = "🚗 <b>Крок 5/7</b> — Відображати водійські права?"
     if update.callback_query:
         await safe_edit(update.callback_query, text, kb)
     else:
@@ -1032,7 +1090,7 @@ async def _ask_rights(update, context):
 async def _ask_zagran(update, context):
     kb = mkb([InlineKeyboardButton("✅ Так", callback_data="zagran:yes"),
                InlineKeyboardButton("❌ Ні",  callback_data="zagran:no")])
-    text = "🌍 <b>Крок 6/7</b> — Є закордонний паспорт?"
+    text = "🌍 <b>Крок 6/7</b> — Відображати закордонний паспорт?"
     if update.callback_query:
         await safe_edit(update.callback_query, text, kb)
     else:
@@ -1042,7 +1100,7 @@ async def _ask_zagran(update, context):
 async def _ask_diploma(update, context):
     kb = mkb([InlineKeyboardButton("✅ Так", callback_data="diploma:yes"),
                InlineKeyboardButton("❌ Ні",  callback_data="diploma:no")])
-    text = "🎓 <b>Крок 7/7</b> — Є диплом або студентський квиток?"
+    text = "🎓 <b>Крок 7/7</b> — Відображати диплом / студентський?"
     if update.callback_query:
         await safe_edit(update.callback_query, text, kb)
     else:
@@ -1076,7 +1134,7 @@ async def select_diploma(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safe_edit(q, text)
 
 
-# ── Main Text Message Handler ──────────────────────────────────────────────────
+# ── Text Message Handler ───────────────────────────────────────────────────────
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
@@ -1087,62 +1145,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = context.user_data.get("state")
     text  = (update.message.text or "").strip()
 
-    # Введення нових даних для кабінету під час редагування
-    if state == EDIT_ORDER_INPUT_VALUE:
-        oid = context.user_data.get("edit_oid")
-        field = context.user_data.get("edit_field")
-        if not oid or not field:
-            context.user_data["state"] = None
-            await update.message.reply_text("❌ Помилка сесії.")
-            return
+    # Введення нових даних для Профілю
+    if state == EDIT_PROFILE_INPUT_VALUE:
+        field = context.user_data.get("edit_profile_field")
+        u = users.get(uid, {})
 
-        orders = await async_load(ORDERS_KEY, {})
-        o = orders.get(oid)
-        if not o or o.get("user_id") != uid:
-            context.user_data["state"] = None
-            await update.message.reply_text("❌ Замовлення не знайдено.")
-            return
-
-        vd = o.setdefault("values_data", gen_values_dict(o))
-
-        if field == "e_fio":
+        if field == "fio":
             if len(text.split()) < 2:
                 await update.message.reply_text("❌ Введіть як мінімум 2 слова (Прізвище Ім'я).")
                 return
-            vd["fio"] = text
+            u["doc_fio"] = text
             if AI_ENABLED:
-                vd["fio_en"] = await ai_transliterate(text)
+                u["doc_fio_en"] = await ai_transliterate(text)
             else:
-                vd["fio_en"] = text
-            o["fio"] = text
+                u["doc_fio_en"] = text
 
-        elif field == "e_dob":
+        elif field == "dob":
             if not re.match(r"^\d{2}\.\d{2}\.\d{4}$", text):
-                await update.message.reply_text("❌ Формат: ДД.ММ.РРРР")
+                await update.message.reply_text("❌ Формат: ДД.ММ.РРРР (наприклад: 12.04.1995)")
                 return
-            vd["birth"] = text
-            o["dob"] = text
+            u["doc_dob"] = text
 
-        elif field == "e_addr":
-            vd["bank_adress"] = text
-            o["address"] = text
+        elif field == "addr":
+            u["doc_address"] = text
 
-        o["values_data"] = vd
-        o["js_content"] = values_to_js(vd)
-        await async_save(ORDERS_KEY, orders)
+        await async_save(USERS_KEY, users)
+        await sync_profile_to_latest_order(uid, u)
 
         context.user_data["state"] = None
-        context.user_data.pop("edit_oid", None)
-        context.user_data.pop("edit_field", None)
+        context.user_data.pop("edit_profile_field", None)
 
         await update.message.reply_text(
-            f"✅ Значення оновлено! Натисніть 🚀 <b>Застосувати та оновити сайт</b> у меню редагування.",
-            reply_markup=mkb([InlineKeyboardButton("✏️ Повернутися до редагування", callback_data=f"edit_ord:{oid}")]),
+            f"✅ <b>Дані успішно збережено в Профілі!</b>\n\nНатисніть 🚀 <b>Застосувати та оновити сайт</b> для публікації змін.",
+            reply_markup=mkb([InlineKeyboardButton("✏️ Повернутися до редагування", callback_data="profile_edit_menu")],
+                             [InlineKeyboardButton("🚀 Оновити сайт кабінету", callback_data="profile_redeploy")]),
             parse_mode="HTML"
         )
         return
 
-    # Admin reply to user
+    # Відповідь адміна
     if is_admin(uid) and update.message.reply_to_message:
         await _handle_admin_reply_msg(update, context)
         return
@@ -1151,7 +1192,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _do_reply_to_user(update, context)
         return
 
-    # Public Promo Enter
+    # Введення промо-коду
     if state == AWAIT_PROMO_CODE and not is_admin(uid):
         result = await check_promo(text, uid)
         if result["ok"]:
@@ -1163,7 +1204,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(result["msg"], parse_mode="HTML")
         return
 
-    # Feedback Submission
+    # Відгук
     if state == AWAIT_FEEDBACK:
         fid = gen_id("fb_")
         feedbacks = await async_load(FEEDBACK_KEY, {})
@@ -1189,18 +1230,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
         context.user_data["state"] = None
-        await update.message.reply_text("✅ <b>Дякуємо за відгук!</b> Відповімо найближчим часом. 🌸", parse_mode="HTML")
+        await update.message.reply_text("✅ <b>Дякуємо за відгук!</b> Ми зв'яжемося з вами найближчим часом. 🌸", parse_mode="HTML")
         return
 
-    # Questionnaire Steps
+    # Кроки анкети
     if state == AWAIT_FIO:
         if len(text.split()) < 2:
-            await update.message.reply_text("❌ Мінімум 2 слова (Прізвище Ім'я).")
+            await update.message.reply_text("❌ Введіть мінімум 2 слова (Прізвище Ім'я).")
             return
         context.user_data["fio"] = text
         context.user_data["state"] = AWAIT_DOB
-        await update.message.reply_text(
-            "📅 <b>Крок 2/7</b> — Дата народження\nФормат: <b>ДД.ММ.РРРР</b>", parse_mode="HTML")
+        await update.message.reply_text("📅 <b>Крок 2/7</b> — Дата народження\nФормат: <b>ДД.ММ.РРРР</b>", parse_mode="HTML")
         return
 
     if state == AWAIT_DOB:
@@ -1223,12 +1263,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _ask_rights(update, context)
         return
 
-    # Admin state processing
+    # Обробка команд адміна
     if is_admin(uid):
         await _handle_admin_state(update, context, state, text, uid)
         return
 
-    # AI Support Response
+    # AI Підтримка
     ai_sup = await get_setting("ai_support")
     if AI_ENABLED and ai_sup and text and not state:
         history = context.user_data.get("ai_history", [])
@@ -1238,10 +1278,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             history.append({"role": "assistant", "content": reply})
             context.user_data["ai_history"] = history[-16:]
             await update.message.reply_text(
-                f"🤖 {reply}\n\n<i>Для замовлення натисніть /start</i>", parse_mode="HTML")
+                f"🤖 {reply}\n\n<i>Для меню натисніть /start</i>", parse_mode="HTML")
             return
 
-    # Forwarding message to Admin
+    # Пересилання повідомлення адміну
     try:
         fwd = await update.message.forward(ADMIN_IDS[0])
         await context.bot.send_message(
@@ -1255,43 +1295,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error("Forward error: %s", e)
 
 
-# ── Media Message Handler ──────────────────────────────────────────────────────
+# ── Media Handler ──────────────────────────────────────────────────────────────
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     state = context.user_data.get("state")
 
-    if state == EDIT_ORDER_AWAIT_PHOTO and update.message.photo:
-        oid = context.user_data.get("edit_oid")
-        if not oid:
-            context.user_data["state"] = None
-            await update.message.reply_text("❌ Помилка сесії.")
-            return
-
-        orders = await async_load(ORDERS_KEY, {})
-        o = orders.get(oid)
-        if not o or o.get("user_id") != uid:
-            context.user_data["state"] = None
-            await update.message.reply_text("❌ Замовлення не знайдено.")
-            return
+    if state == EDIT_PROFILE_AWAIT_PHOTO and update.message.photo:
+        users = await async_load(USERS_KEY, {})
+        u = users.get(uid, {})
 
         photo_file  = await update.message.photo[-1].get_file()
         photo_bytes = bytes(await photo_file.download_as_bytearray())
 
         os.makedirs(ORDER_PHOTOS_DIR, exist_ok=True)
-        photo_path = os.path.join(ORDER_PHOTOS_DIR, f"{oid}.png")
+        photo_path = os.path.join(ORDER_PHOTOS_DIR, f"user_{uid}.png")
         await asyncio.to_thread(lambda: open(photo_path, "wb").write(photo_bytes))
 
-        o["photo_path"] = photo_path
-        await async_save(ORDERS_KEY, orders)
+        u["doc_photo_path"] = photo_path
+        await async_save(USERS_KEY, users)
+        await sync_profile_to_latest_order(uid, u)
 
         context.user_data["state"] = None
-        context.user_data.pop("edit_oid", None)
-        context.user_data.pop("edit_field", None)
+        context.user_data.pop("edit_profile_field", None)
 
         await update.message.reply_text(
-            "✅ Фото оновлено! Натисніть 🚀 **Застосувати та оновити сайт** у меню редагування.",
-            reply_markup=mkb([InlineKeyboardButton("✏️ Повернутися до редагування", callback_data=f"edit_ord:{oid}")]),
+            "✅ <b>Фото профілю оновлено!</b>\n\nНатисніть 🚀 <b>Застосувати та оновити сайт</b> для публікації змін.",
+            reply_markup=mkb([InlineKeyboardButton("✏️ Повернутися до редагування", callback_data="profile_edit_menu")],
+                             [InlineKeyboardButton("🚀 Оновити сайт кабінету", callback_data="profile_redeploy")]),
             parse_mode="HTML"
         )
         return
@@ -1323,6 +1354,22 @@ async def _process_order(update: Update, context: ContextTypes.DEFAULT_TYPE, uid
     fio_ua = context.user_data.get("fio", "")
     if AI_ENABLED and fio_ua:
         context.user_data["fio_en"] = await ai_transliterate(fio_ua)
+
+    # Збереження даних у Профіль за замовчуванням
+    users = await async_load(USERS_KEY, {})
+    if uid in users:
+        users[uid].update({
+            "doc_fio":        context.user_data.get("fio"),
+            "doc_fio_en":     context.user_data.get("fio_en"),
+            "doc_dob":        context.user_data.get("dob"),
+            "doc_sex":        "Ч" if context.user_data.get("sex") == "M" else "Ж",
+            "doc_address":    context.user_data.get("address", ""),
+            "doc_is_rights":  context.user_data.get("is_rights", True),
+            "doc_is_zagran":  context.user_data.get("is_zagran", True),
+            "doc_is_diploma": context.user_data.get("is_diploma", False),
+            "doc_photo_path": photo_path,
+        })
+        await async_save(USERS_KEY, users)
 
     values_data = gen_values_dict({**context.user_data, "order_id": oid})
     js_content  = values_to_js(values_data)
@@ -1356,7 +1403,6 @@ async def _process_order(update: Update, context: ContextTypes.DEFAULT_TYPE, uid
     }
     await async_save(ORDERS_KEY, orders)
 
-    users = await async_load(USERS_KEY, {})
     if uid in users:
         users[uid]["total_orders"] = users[uid].get("total_orders", 0) + 1
         await async_save(USERS_KEY, users)
@@ -1390,8 +1436,7 @@ async def _process_order(update: Update, context: ContextTypes.DEFAULT_TYPE, uid
     for admin_id in ADMIN_IDS:
         try:
             buf = io.BytesIO(photo_bytes); buf.name = f"photo_{oid}.png"
-            await context.bot.send_photo(admin_id, buf, caption=caption,
-                                         reply_markup=admin_kb, parse_mode="HTML")
+            await context.bot.send_photo(admin_id, buf, caption=caption, reply_markup=admin_kb, parse_mode="HTML")
             js_buf = io.BytesIO(js_content.encode()); js_buf.name = f"values_{oid}.js"
             await context.bot.send_document(admin_id, js_buf, caption=f"📄 values.js для #{oid}")
         except Exception as e:
@@ -1401,7 +1446,7 @@ async def _process_order(update: Update, context: ContextTypes.DEFAULT_TYPE, uid
     await update.message.reply_text(
         f"✅ <b>Замовлення #{esc(oid)} прийнято!</b>\n\n"
         f"💳 До сплати: <b>{price_text}</b>\n\n"
-        "📌 Далі:\n1️⃣ Отримаєте реквізити\n2️⃣ Надішліть фото чека\n3️⃣ Отримаєте посилання ⚡️",
+        "📌 Подальші кроки:\n1️⃣ Отримайте реквізити\n2️⃣ Надішліть фото чека\n3️⃣ Отримайте посилання на сайт ⚡️",
         parse_mode="HTML",
     )
     context.user_data.clear()
@@ -1529,7 +1574,7 @@ async def _forward_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, u
             logger.error("Receipt fwd (group): %s", e)
 
     await update.message.reply_text(
-        "✅ <b>Чек отримано!</b>\nАдміністратор перевірить найближчим часом. 🌸", parse_mode="HTML")
+        "✅ <b>Чек отримано!</b>\nАдміністратор перевірить його найближчим часом. 🌸", parse_mode="HTML")
 
 
 # ── Chain Deploy Execution ─────────────────────────────────────────────────────
@@ -1569,7 +1614,7 @@ async def _handle_referral_bonus(context, uid: str):
     await async_save(USERS_KEY, users)
 
 
-# ── Admin Reply Processing ─────────────────────────────────────────────────────
+# ── Admin Handlers ─────────────────────────────────────────────────────────────
 
 async def _handle_admin_reply_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_text = update.message.reply_to_message.text or update.message.reply_to_message.caption or ""
@@ -1610,8 +1655,6 @@ async def _do_reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("reply_to_uid", None)
     context.user_data.pop("reply_fb_id",  None)
 
-
-# ── Admin FSM State Router ─────────────────────────────────────────────────────
 
 async def _handle_admin_state(update, context, state, text, uid):
     if state == AWAIT_REPLY_TO_USER:
@@ -1797,8 +1840,6 @@ async def _handle_admin_state(update, context, state, text, uid):
             f"✅ Тариф: {emj} {esc(name)} — {price}₴  ({'∞' if not days else f'{days} дн.'})"); return
 
 
-# ── Admin: Complete Order Manual Files Handler ─────────────────────────────────
-
 async def _process_complete_order_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
     oid = context.user_data.get("complete_oid")
     client_uid = context.user_data.get("complete_uid")
@@ -1881,7 +1922,7 @@ async def adm_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await safe_edit(q,
         f"📊 <b>Статистика</b>  {now_fmt()}\n\n"
-        f"👥 Юзерів: <b>{len(users)}</b>  (+{new_u_24h} за 24г)\n"
+        f"👥 Юзерів: <b>{len(users)}</b>  (+$new_u_24h за 24г)\n"
         f"📦 Замовлення: <b>{total_o}</b>  |  ✅ {done_o}  🌐 {deployed_o}  ⏳ {pending_o}  ❌ {rejected_o}\n"
         f"📈 За 24г: +{new_o_24h} замовлень\n\n"
         f"💰 Дохід: <b>{revenue}₴</b>",
@@ -1921,8 +1962,7 @@ async def adm_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def adm_order_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     parts = q.data.split(":")
-    if len(parts) < 2:
-        return
+    if len(parts) < 2: return
     oid = parts[1]
     orders = await async_load(ORDERS_KEY, {})
     o = orders.get(oid, {})
@@ -1966,8 +2006,7 @@ async def adm_order_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def adm_approve_deploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     parts = q.data.split(":")
-    if len(parts) < 3:
-        return
+    if len(parts) < 3: return
     client_uid, oid = parts[1], parts[2]
     await safe_edit(q, "⏳ <b>Підтверджуємо і деплоємо...</b>")
 
@@ -2031,8 +2070,7 @@ async def adm_approve_deploy(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def adm_approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     parts = q.data.split(":")
-    if len(parts) < 3:
-        return
+    if len(parts) < 3: return
     client_uid, oid = parts[1], parts[2]
     orders = await async_load(ORDERS_KEY, {})
     if oid in orders:
@@ -2058,16 +2096,14 @@ async def adm_approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📨 Файли вручну", callback_data=f"adm_complete:{client_uid}:{oid}")],
         back_btn("adm:orders"),
     ]
-    await safe_edit(q, f"✅ Реквізити надіслані {client_uid}. Оберіть спосіб деплою:",
-                    InlineKeyboardMarkup(kb_rows))
+    await safe_edit(q, f"✅ Реквізити надіслані {client_uid}. Оберіть спосіб деплою:", InlineKeyboardMarkup(kb_rows))
 
 
 @admin_only
 async def adm_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     parts = q.data.split(":")
-    if len(parts) < 3:
-        return
+    if len(parts) < 3: return
     context.user_data["reject_uid"] = parts[1]
     context.user_data["reject_oid"] = parts[2]
     context.user_data["state"]      = AWAIT_REJECT_REASON
@@ -2078,8 +2114,7 @@ async def adm_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def adm_complete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     parts = q.data.split(":")
-    if len(parts) < 3:
-        return
+    if len(parts) < 3: return
     context.user_data["complete_uid"] = parts[1]
     context.user_data["complete_oid"] = parts[2]
     context.user_data["state"]        = AWAIT_ORDER_COMPLETE_FILE
@@ -2090,8 +2125,7 @@ async def adm_complete(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def adm_push_pages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     parts = q.data.split(":")
-    if len(parts) < 3:
-        return
+    if len(parts) < 3: return
     client_uid, oid = parts[1], parts[2]
 
     if not PAGES_GH_TOKEN or not os.getenv("GH_TOKEN_2"):
@@ -2116,8 +2150,7 @@ async def adm_push_pages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def adm_push_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     parts = q.data.split(":")
-    if len(parts) < 3:
-        return
+    if len(parts) < 3: return
     client_uid, oid = parts[1], parts[2]
     await safe_edit(q, "⏳ <b>Деплоємо ланцюжком...</b>\nЦе може зайняти 30–60 секунд.")
 
@@ -2213,8 +2246,7 @@ async def adm_chain_deploy_run(update: Update, context: ContextTypes.DEFAULT_TYP
 async def adm_send_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     parts = q.data.split(":")
-    if len(parts) < 3:
-        return
+    if len(parts) < 3: return
     client_uid, oid = parts[1], parts[2]
     orders = await async_load(ORDERS_KEY, {})
     order  = orders.get(oid, {})
@@ -2290,8 +2322,7 @@ async def _send_user_card(update, context, uid2: str, u: dict):
 async def adm_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     parts = q.data.split(":")
-    if len(parts) < 2:
-        return
+    if len(parts) < 2: return
     uid2 = parts[1]
     users = await async_load(USERS_KEY, {})
     if uid2 in users:
@@ -2306,8 +2337,7 @@ async def adm_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def adm_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     parts = q.data.split(":")
-    if len(parts) < 2:
-        return
+    if len(parts) < 2: return
     uid2 = parts[1]
     users = await async_load(USERS_KEY, {})
     if uid2 in users:
@@ -2327,8 +2357,7 @@ async def adm_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     parts = q.data.split(":")
-    if len(parts) < 2:
-        return
+    if len(parts) < 2: return
     uid2 = parts[1]
     context.user_data["state"]        = AWAIT_REPLY_TO_USER
     context.user_data["reply_to_uid"] = uid2
@@ -2340,8 +2369,7 @@ async def adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def adm_confirm_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     parts = q.data.split(":")
-    if len(parts) < 3:
-        return
+    if len(parts) < 3: return
     uid2, amount = parts[1], int(parts[2])
     users = await async_load(USERS_KEY, {})
     if uid2 in users:
@@ -2407,8 +2435,7 @@ async def tariff_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def tariff_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     parts = q.data.split(":")
-    if len(parts) < 2:
-        return
+    if len(parts) < 2: return
     key = parts[1]
     context.user_data["edit_tariff_key"] = key
     tariffs = await load_tariffs()
@@ -2557,8 +2584,7 @@ async def adm_feedbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def reply_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     parts = q.data.split(":")
-    if len(parts) < 2:
-        return
+    if len(parts) < 2: return
     fid = parts[1]
     feedbacks = await async_load(FEEDBACK_KEY, {})
     fb = feedbacks.get(fid, {})
@@ -2675,8 +2701,7 @@ async def adm_export_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def adm_export_do(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     parts = q.data.split(":")
-    if len(parts) < 2:
-        return
+    if len(parts) < 2: return
     export_type = parts[1]
     await q.answer("⏳ Готуємо...")
     admin_id = q.from_user.id
@@ -2797,21 +2822,23 @@ async def withdraw_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def feedback_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["state"] = AWAIT_FEEDBACK
     await safe_edit(update.callback_query,
-        "💬 <b>Написати нам</b>\n\nВведіть повідомлення:", mkb(back_btn("home")))
+        "💬 <b>Написати підтримці</b>\n\nВведіть ваше запитання або пропозицію:", mkb(back_btn("home")))
 
 
 async def about_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     s = await load_settings()
     await safe_edit(update.callback_query,
-        f"🪪 <b>FunsDiia</b> — генерація документів\n\n"
-        "1️⃣ Обрати тариф\n2️⃣ Ввести дані\n3️⃣ Надіслати фото 3×4\n"
-        "4️⃣ Оплатити → отримати посилання\n\n"
+        f"🪪 <b>FunsDiia</b> — генерація та зручне управління документами\n\n"
+        "1️⃣ Заповнюйте свої дані один раз у <b>Профілі</b>\n"
+        "2️⃣ Обирайте зручний тариф у <b>Каталозі</b>\n"
+        "3️⃣ Сплачуйте замовлення та отримуйте персональне посилання\n"
+        "4️⃣ Редагуйте свої дані у будь-який час прямо з Профілю!\n\n"
         f"💳 <code>{esc(s.get('payment_card','—'))}</code>  ({esc(s.get('payment_holder','—'))})\n"
-        "⚡️ До 10 хвилин",
+        "⚡️ Швидке налаштування за лічені хвилини",
         mkb(back_btn("home")))
 
 
-# ── Global Non-blocking Callback Query Router ──────────────────────────────────
+# ── Global Router ──────────────────────────────────────────────────────────────
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q   = update.callback_query
@@ -2836,6 +2863,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "home":              cmd_start,
             "catalog":           show_catalog,
             "profile":           show_profile,
+            "profile_edit_menu": profile_edit_menu,
+            "profile_redeploy":  profile_redeploy,
             "my_orders":         my_orders_handler,
             "ref_menu":          ref_menu,
             "withdraw":          withdraw_handler,
@@ -2871,13 +2900,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if d in routes:
             return await routes[d](update, context)
 
+        if d.startswith("p_toggle:"):          return await profile_toggle_field(update, context)
+        if d.startswith("p_edit:"):            return await profile_input_prompt(update, context)
+
         if d.startswith("user_ord_view:"):    return await user_ord_view(update, context)
-        if d.startswith("edit_ord:"):         return await edit_ord_menu(update, context)
-        if d.startswith("e_sex:") or d.startswith("e_rights:") or d.startswith("e_zagran:") or d.startswith("e_diploma:"):
-            return await edit_ord_toggle(update, context)
-        if d.startswith("e_fio:") or d.startswith("e_dob:") or d.startswith("e_addr:") or d.startswith("e_photo:"):
-            return await edit_ord_input_prompt(update, context)
-        if d.startswith("e_apply:"):           return await edit_ord_apply(update, context)
 
         if d.startswith("tar:"):               return await select_tariff(update, context)
         if d.startswith("sex:"):               return await select_sex(update, context)
@@ -2991,9 +3017,10 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Використання: /unban <user_id>"); return
     uid2 = context.args[0]
     users = await async_load(USERS_KEY, {})
-    if uid2 in users:
-        users[uid2]["banned"] = False
-        await async_save(USERS_KEY, users)
+    if uid2 not in users:
+        await update.message.reply_text("❌ Не знайдено"); return
+    users[uid2]["banned"] = False
+    await async_save(USERS_KEY, users)
     await update.message.reply_text(f"✅ {uid2} розблоковано.")
 
 
