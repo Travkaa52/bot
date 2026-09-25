@@ -2466,7 +2466,7 @@ async def adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = q.data.split(":")
     if len(parts) < 2: return
     uid2 = parts[1]
-    context.user_data["state"]        = AWAIT_REPLY_TO_USER
+    context.user_data["state"]         = AWAIT_REPLY_TO_USER
     context.user_data["reply_to_uid"] = uid2
     context.user_data.pop("reply_fb_id", None)
     await safe_edit(q, f"💬 Повідомлення клієнту {uid2}\n\nВведіть текст:", mkb(back_btn("admin_panel")))
@@ -2716,7 +2716,7 @@ async def adm_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⚙️ <b>Налаштування</b>\n\n"
         f"🛠 Тех. обслуговування: {'🔴 Увімк.' if s.get('maintenance_mode') else '🟢 Вимк.'}\n"
         f"📦 Нові замовлення: {'✅' if s.get('new_orders_enabled') else '⛔️'}\n\n"
-        f"🤖 AI: {'✅' if AI_ENABLED else '❌ DEEPSEEK_API_KEY не задано'}\n"
+        f"🤖 AI: {'✅' if AI_ENABLED else '❌ GEMINI_API_KEY не задано'}\n"
         f"  · Перевірка чеків: {'✅' if s.get('ai_check_receipts',True) else '❌'}\n"
         f"  · Авто-деплой: {'✅' if s.get('ai_auto_deploy',True) else '❌'}\n"
         f"  · Підтримка: {'✅' if s.get('ai_support',True) else '❌'}\n\n"
@@ -2967,30 +2967,30 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         routes = {
-            "home":              cmd_start,
-            "catalog":           show_catalog,
-            "profile":           show_profile,
+            "home":                cmd_start,
+            "catalog":             show_catalog,
+            "profile":             show_profile,
             "profile_edit_menu": profile_edit_menu,
             "profile_redeploy":  profile_redeploy,
-            "my_orders":         my_orders_handler,
-            "ref_menu":          ref_menu,
+            "my_orders":          my_orders_handler,
+            "ref_menu":           ref_menu,
             "withdraw":          withdraw_handler,
             "feedback":          feedback_menu,
-            "about":             about_handler,
-            "promo_enter":       promo_enter,
-            "admin_panel":       admin_panel,
-            "adm:stats":         adm_stats,
-            "adm:orders":        adm_orders,
-            "adm:users":         adm_users,
-            "adm:search":        adm_search,
-            "adm:balance":       adm_balance,
-            "adm:tariffs":       adm_tariffs,
-            "adm:promos":        adm_promos,
-            "adm:broadcast":     adm_broadcast,
-            "adm:feedbacks":     adm_feedbacks,
-            "adm:settings":      adm_settings,
-            "adm:logs":          adm_logs,
-            "adm:export_db":     adm_export_db,
+            "about":              about_handler,
+            "promo_enter":        promo_enter,
+            "admin_panel":        admin_panel,
+            "adm:stats":          adm_stats,
+            "adm:orders":         adm_orders,
+            "adm:users":          adm_users,
+            "adm:search":         adm_search,
+            "adm:balance":        adm_balance,
+            "adm:tariffs":        adm_tariffs,
+            "adm:promos":         adm_promos,
+            "adm:broadcast":      adm_broadcast,
+            "adm:feedbacks":      adm_feedbacks,
+            "adm:settings":       adm_settings,
+            "adm:logs":           adm_logs,
+            "adm:export_db":      adm_export_db,
             "adm:chain_deploy":  adm_chain_deploy_menu,
             "chain_deploy_run":  adm_chain_deploy_run,
             "broadcast_go":      broadcast_go,
