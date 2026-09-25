@@ -28,6 +28,11 @@ from typing import Optional, Dict, Any, List
 import pytz
 import requests as _req
 from dotenv import load_dotenv
+
+from google import genai
+from google.genai import types
+from google.genai.errors import APIError
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import BadRequest, Forbidden, TelegramError
 from telegram.ext import (
@@ -63,8 +68,8 @@ _raw_group = os.getenv("GROUP_CHAT_ID", "").strip()
 GROUP_CHAT_ID: Optional[int] = int(_raw_group) if _raw_group.lstrip("-").isdigit() else None
 
 PAGES_GH_TOKEN: str = os.getenv("PAGES_GH_TOKEN", "")
-DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
-AI_ENABLED = bool(DEEPSEEK_API_KEY)
+GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "") or os.getenv("DEEPSEEK_API_KEY", "")
+AI_ENABLED = bool(GEMINI_API_KEY)
 
 TIMEZONE = pytz.timezone("Europe/Kyiv")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "FunsDiia_bot")
@@ -271,80 +276,182 @@ async def apply_promo(code: str, uid: str):
         await save_promos(promos)
 
 
-# ── DeepSeek AI Integration ───────────────────────────────────────────────────
+# ── Google Gemini Integration ──────────────────────────────────────────────────
 
-_DEEPSEEK_URL   = "https://api.deepseek.com/chat/completions"
-_DEEPSEEK_MODEL = "deepseek-chat"
+_GEMINI_MODEL = "gemini-2.5-flash"
+
+# Ініціалізація Gemini SDK Клієнта
+ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 _SYS_SUPPORT = (
-    "Ти — чат-підтримка сервісу FunsDiia. Відповідай коротко, дружньо, українською. "
-    "Якщо питання про оплату — скажи, що реквізити надає адміністратор після підтвердження замовлення."
+    "Ти — ввічливий, дружній та швидкий асистент чат-підтримки сервісу FunsDiia.\n"
+    "Твоя мета — допомагати користувачам із запитаннями щодо послуг, оплати та замовлень.\n"
+    "Правила:\n"
+    "1. Відповідай виключно українською мовою.\n"
+    "2. Будь лаконічним, але вичерпним (2-4 речення).\n"
+    "3. Якщо запитання стосується оплати або реквізитів — чітко вкажи, що реквізити надає адміністратор після підтвердження замовлення.\n"
+    "4. Не вигадуй інформацію, якої не знаєш. Якщо ситуація нестандартна — запропонуй зачекати на оператора."
 )
+
 _SYS_RECEIPT = (
-    'Ти — верифікатор чеків. Відповідай ТІЛЬКИ JSON без зайвого тексту: '
-    '{"ok": true/false, "confidence": 0-100, "amount": число|null, "reason": "опис"}. '
-    "ok=true якщо це реальний банківський чек."
+    "Ти — експерт-верифікатор фінансових чеків та квитанцій. Твоє завдання — проаналізувати зображення чека.\n"
+    "Перевір:\n"
+    "1. Чи це справжній чек/квитанція банку (Приват24, Monobank, Ощад тощо).\n"
+    "2. Чи збігається фактична сума на чеку з очікуваною.\n"
+    "3. Чи немає явних ознак графічного редагування/підробки.\n"
+    "Поверни результат строго у форматі JSON."
+)
+
+_RECEIPT_SCHEMA = types.Schema(
+    type=types.Type.OBJECT,
+    properties={
+        "ok": types.Schema(
+            type=types.Type.BOOLEAN,
+            description="true, якщо це справжній чек і сума збігається",
+        ),
+        "confidence": types.Schema(
+            type=types.Type.INTEGER,
+            description="Впевненість від 0 до 100%",
+        ),
+        "amount": types.Schema(
+            type=types.Type.NUMBER,
+            description="Фактично виявлена сума на чеку (число) або null",
+        ),
+        "bank_name": types.Schema(
+            type=types.Type.STRING,
+            description="Назва банку або платіжної системи (Monobank, ПриватБанк тощо)",
+        ),
+        "reason": types.Schema(
+            type=types.Type.STRING,
+            description="Детальний опис результату аналізу українською мовою",
+        ),
+    },
+    required=["ok", "confidence", "amount", "reason"],
+)
+
+_SYS_TRANSLIT = (
+    "Ти — офіційний транслітератор за стандартом КМУ (Постанова №55 від 27 січня 2010 р.).\n"
+    "Перекладай українські ПІБ латиницею точно за цим стандартом.\n"
+    "Відповідай ТІЛЬКИ результатом транслітерації без лапок, пояснень чи розділових знаків."
 )
 
 
-def _deepseek_sync(messages: list, system: str = "", max_tokens: int = 500) -> str:
-    if not DEEPSEEK_API_KEY:
-        return ""
-    payload = {
-        "model": _DEEPSEEK_MODEL,
-        "max_tokens": max_tokens,
-        "temperature": 0.3,
-        "messages": ([{"role": "system", "content": system}] if system else []) + messages,
+async def ai_check_receipt(photo_bytes: bytes, expected_amount: int, mime_type: str = "image/jpeg") -> dict:
+    """Аналізує чек через Gemini Vision та повертає результат верифікації."""
+    default_result = {
+        "ok": False,
+        "confidence": 0,
+        "amount": None,
+        "bank_name": None,
+        "reason": "AI відключено або відсутнє фото",
+        "auto_approved": False,
     }
+
+    if not AI_ENABLED or not ai_client or not photo_bytes:
+        return default_result
+
     try:
-        resp = _req.post(
-            _DEEPSEEK_URL,
-            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
-            json=payload, timeout=25,
+        image_part = types.Part.from_bytes(data=photo_bytes, mime_type=mime_type)
+        prompt = f"Очікувана сума платежу: {expected_amount} UAH. Проаналізуй цей чек."
+
+        config = types.GenerateContentConfig(
+            system_instruction=_SYS_RECEIPT,
+            temperature=0.1,
+            response_mime_type="application/json",
+            response_schema=_RECEIPT_SCHEMA,
         )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        logger.error("DeepSeek request error: %s", e)
-        return ""
 
+        response = await ai_client.aio.models.generate_content(
+            model=_GEMINI_MODEL,
+            contents=[image_part, prompt],
+            config=config,
+        )
 
-async def ai_check_receipt(photo_bytes: bytes, expected_amount: int) -> dict:
-    result = {"ok": None, "confidence": 0, "amount": None, "reason": "", "auto_approved": False}
-    if not AI_ENABLED or not photo_bytes:
-        return result
-    b64 = base64.b64encode(photo_bytes).decode()
-    messages = [{"role": "user", "content": [
-        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-        {"type": "text", "text": f"Очікувана сума: {expected_amount}₴. Проаналізуй цей чек."},
-    ]}]
-    raw = await asyncio.to_thread(_deepseek_sync, messages, _SYS_RECEIPT, 300)
-    try:
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        if m:
-            parsed = json.loads(m.group())
-            result.update(parsed)
-            result["auto_approved"] = bool(parsed.get("ok")) and int(parsed.get("confidence", 0)) >= 80
+        if not response.text:
+            default_result["reason"] = "Порожня відповідь від моделі"
+            return default_result
+
+        parsed = json.loads(response.text)
+        parsed["auto_approved"] = bool(parsed.get("ok")) and int(parsed.get("confidence", 0)) >= 85
+        return parsed
+
+    except APIError as e:
+        logger.error("Gemini API error during receipt check: %s", e)
+        default_result["reason"] = f"Помилка сервісу AI: {e.message}"
+        return default_result
     except Exception as e:
-        logger.warning("Receipt JSON parse error: %s | raw=%s", e, raw[:100])
-    return result
+        logger.error("Unexpected error in ai_check_receipt: %s", e)
+        default_result["reason"] = "Помилка обробки чека"
+        return default_result
 
 
 async def ai_support_reply(text: str, history: list = None) -> str:
-    if not AI_ENABLED:
+    """Генерує відповідь клієнтської підтримки з урахуванням історії."""
+    if not AI_ENABLED or not ai_client or not text.strip():
         return ""
-    messages = (history or []) + [{"role": "user", "content": text}]
-    return await asyncio.to_thread(_deepseek_sync, messages, _SYS_SUPPORT, 400)
+
+    try:
+        formatted_contents = []
+        if history:
+            for msg in history:
+                role = "user" if msg.get("role") == "user" else "model"
+                formatted_contents.append(
+                    types.Content(
+                        role=role,
+                        parts=[types.Part.from_text(text=msg.get("content", ""))]
+                    )
+                )
+
+        formatted_contents.append(
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=text)]
+            )
+        )
+
+        config = types.GenerateContentConfig(
+            system_instruction=_SYS_SUPPORT,
+            temperature=0.4,
+            max_output_tokens=500,
+        )
+
+        response = await ai_client.aio.models.generate_content(
+            model=_GEMINI_MODEL,
+            contents=formatted_contents,
+            config=config,
+        )
+
+        return response.text.strip() if response.text else ""
+
+    except Exception as e:
+        logger.error("Gemini support reply error: %s", e)
+        return ""
 
 
 async def ai_transliterate(fio_ua: str) -> str:
-    if not AI_ENABLED or not fio_ua:
+    """Транслітерує ПІБ за офіційним стандартом КМУ."""
+    if not AI_ENABLED or not ai_client or not fio_ua.strip():
+        return fio_ua.strip()
+
+    try:
+        config = types.GenerateContentConfig(
+            system_instruction=_SYS_TRANSLIT,
+            temperature=0.0,
+            max_output_tokens=100,
+        )
+
+        response = await ai_client.aio.models.generate_content(
+            model=_GEMINI_MODEL,
+            contents=[f"Транслітеруй: '{fio_ua.strip()}'"],
+            config=config,
+        )
+
+        result = response.text.strip("\"' \n\t") if response.text else ""
+        return result or fio_ua
+
+    except Exception as e:
+        logger.error("Gemini transliteration error: %s", e)
         return fio_ua
-    messages = [{"role": "user", "content":
-        f"Транслітеруй ПІБ латиницею (стандарт КМУ 2010): '{fio_ua}'. "
-        "Відповідь — ТІЛЬКИ транслітерація."}]
-    result = await asyncio.to_thread(_deepseek_sync, messages, "", 50)
-    return result.strip("\"' ") or fio_ua
 
 
 # ── Document Generator Functions ───────────────────────────────────────────────
