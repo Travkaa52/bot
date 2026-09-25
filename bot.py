@@ -278,7 +278,7 @@ async def apply_promo(code: str, uid: str):
 
 # ── Google Gemini Integration ──────────────────────────────────────────────────
 
-_GEMINI_MODEL = "gemini-2.5-flash"
+_GEMINI_MODEL = "gemini-3.5-flash"
 
 # Ініціалізація Gemini SDK Клієнта
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
