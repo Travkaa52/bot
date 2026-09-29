@@ -964,7 +964,24 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
 
 
-# ── Profile Management Handlers ────────────────────────────────────────────────
+# ── Profile & Orders Management Handlers (Extended) ───────────────────────────
+
+def _calc_profile_completion(u: dict, photo_path: str = "") -> int:
+    """Обчислює відсоток заповненості профілю користувача."""
+    fields = [
+        bool(u.get("doc_fio")),
+        bool(u.get("doc_dob")),
+        bool(u.get("doc_address")),
+        bool(photo_path or u.get("doc_photo_path")),
+    ]
+    return int((sum(fields) / len(fields)) * 100)
+
+
+def _render_progress_bar(percent: int) -> str:
+    """Генерує візуальний прогрес-бар."""
+    filled = int(percent / 10)
+    return "🟩" * filled + "⬜" * (10 - filled) + f" {percent}%"
+
 
 async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -975,6 +992,7 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     oid, last_order = await get_latest_order_for_user(uid)
     
     fio = u.get("doc_fio") or (last_order.get("values_data", {}).get("fio") if last_order else "Не вказано")
+    fio_en = u.get("doc_fio_en") or (last_order.get("values_data", {}).get("fio_en") if last_order else "—")
     dob = u.get("doc_dob") or (last_order.get("values_data", {}).get("birth") if last_order else "Не вказано")
     sex = "Чоловік ♂️" if u.get("doc_sex", "Ч") in ("Ч", "M") else "Жінка ♀️"
     addr = u.get("doc_address") or (last_order.get("values_data", {}).get("bank_adress") if last_order else "Не вказано")
@@ -982,24 +1000,34 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     r = "✅ Увімкнено" if u.get("doc_is_rights", True) else "❌ Вимкнено"
     z = "✅ Увімкнено" if u.get("doc_is_zagran", True) else "❌ Вимкнено"
     d = "✅ Увімкнено" if u.get("doc_is_diploma", False) else "❌ Вимкнено"
-    photo_st = "✅ Завантажено" if (u.get("doc_photo_path") or (last_order and last_order.get("photo_path"))) else "❌ Відсутнє"
+    
+    photo_path = u.get("doc_photo_path") or (last_order.get("photo_path") if last_order else "")
+    photo_st = "✅ Завантажено" if photo_path else "❌ Відсутнє"
+
+    completion = _calc_profile_completion(u, photo_path)
+    progress_bar = _render_progress_bar(completion)
 
     ref_link = f"https://t.me/{BOT_USERNAME}?start={uid}"
-    vip_label = "👑 VIP" if u.get("vip") else "👤 Стандарт"
+    vip_label = "👑 VIP Клієнт" if u.get("vip") else "👤 Стандартний профіль"
 
     pages_url = last_order.get("pages_url") if last_order else None
     cabinet_status = ""
     if pages_url:
-        cabinet_status = f"\n🌐 <b>Активний сайт:</b> <a href='{pages_url}'>Відкрити кабінет</a>"
+        sub_end = last_order.get("subscription_end")
+        days_left = days_until_expiry(sub_end) if sub_end else None
+        expiry_info = f" (залишилось {days_left} дн.)" if days_left is not None else " (безстроково)"
+        cabinet_status = f"\n🌐 <b>Активний кабінет:</b> <a href='{pages_url}'>Відкрити</a>{expiry_info}"
 
     text = (
         f"👤 <b>ОСОБИСТИЙ КАБІНЕТ & ПРОФІЛЬ</b>  [{vip_label}]\n"
         f"────────────────────────────\n"
         f"🆔 <b>ID:</b> <code>{uid}</code>\n"
         f"💰 <b>Баланс:</b> <code>{u.get('balance', 0)}₴</code>\n"
-        f"👥 <b>Рефералів:</b> <code>{u.get('ref_count', 0)}</code>{cabinet_status}\n\n"
+        f"👥 <b>Запрошено рефералів:</b> <code>{u.get('ref_count', 0)}</code>{cabinet_status}\n\n"
+        f"📊 <b>Заповненість профілю:</b>\n{progress_bar}\n\n"
         f"📋 <b>ПЕРСОНАЛЬНІ ДАНІ ДОКУМЕНТІВ:</b>\n"
-        f"▫️ <b>ПІБ:</b> {esc(fio)}\n"
+        f"▫️ <b>ПІБ (Укр):</b> {esc(fio)}\n"
+        f"▫️ <b>ПІБ (Eng):</b> <code>{esc(fio_en)}</code>\n"
         f"▫️ <b>Дата народження:</b> {esc(dob)}\n"
         f"▫️ <b>Стать:</b> {sex}\n"
         f"▫️ <b>Адреса:</b> {esc(addr)}\n"
@@ -1013,16 +1041,54 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb_rows = [
         [InlineKeyboardButton("✏️ Редагувати дані документа", callback_data="profile_edit_menu")],
     ]
+    
+    if photo_path and os.path.exists(photo_path):
+        kb_rows.append([InlineKeyboardButton("🖼 Переглянути поточне фото", callback_data="profile_view_photo")])
+
     if pages_url and last_order.get("status") in ("deployed", "completed", "approved"):
         kb_rows.append([InlineKeyboardButton("🚀 Застосувати зміни та оновити сайт", callback_data="profile_redeploy")])
     
     kb_rows.extend([
         [InlineKeyboardButton("💸 Вивести кошти", callback_data="withdraw"),
-         InlineKeyboardButton("👥 Реферали", callback_data="ref_menu")],
+         InlineKeyboardButton("👥 Реферальна система", callback_data="ref_menu")],
         back_btn("home")
     ])
 
     await safe_edit(q, text, InlineKeyboardMarkup(kb_rows), disable_web_page_preview=True)
+
+
+async def profile_view_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Відображення поточного аватра/фото 3х4 з можливістю його швидкої заміни."""
+    q = update.callback_query
+    uid = str(q.from_user.id)
+    users = await async_load(USERS_KEY, {})
+    u = users.get(uid, {})
+
+    oid, last_order = await get_latest_order_for_user(uid)
+    photo_path = u.get("doc_photo_path") or (last_order.get("photo_path") if last_order else "")
+
+    if not photo_path or not os.path.exists(photo_path):
+        await q.answer("❌ Фото не знайдено або файл видалено.", show_alert=True)
+        return
+
+    try:
+        await q.message.delete()
+    except Exception:
+        pass
+
+    kb = mkb(
+        [InlineKeyboardButton("📸 Завантажити нове фото", callback_data="p_edit:photo")],
+        [InlineKeyboardButton("🔙 Повернутися до профілю", callback_data="profile")]
+    )
+
+    with open(photo_path, "rb") as f:
+        await context.bot.send_photo(
+            chat_id=q.message.chat_id,
+            photo=f,
+            caption="🖼 <b>Ваше поточне фото 3×4 для документів.</b>",
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
 
 
 async def profile_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1032,21 +1098,26 @@ async def profile_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = users.get(uid, {})
 
     sex = "Чоловік ♂️" if u.get("doc_sex", "Ч") in ("Ч", "M") else "Жінка ♀️"
-    r = "✅ Так" if u.get("doc_is_rights", True) else "❌ Ні"
-    z = "✅ Так" if u.get("doc_is_zagran", True) else "❌ Ні"
-    d = "✅ Так" if u.get("doc_is_diploma", False) else "❌ Ні"
+    r = "✅ Увімкнено" if u.get("doc_is_rights", True) else "❌ Вимкнено"
+    z = "✅ Увімкнено" if u.get("doc_is_zagran", True) else "❌ Вимкнено"
+    d = "✅ Увімкнено" if u.get("doc_is_diploma", False) else "❌ Вимкнено"
+
+    fio_ua = u.get('doc_fio', '—')
+    fio_en = u.get('doc_fio_en', 'Автоматично')
 
     text = (
         f"✏️ <b>РЕДАГУВАННЯ ДАНИХ ДОКУМЕНТА</b>\n"
         f"────────────────────────────\n"
-        f"Оберіть пункт, який бажаєте змінити.\n\n"
-        f"📝 <b>ПІБ:</b> {esc(u.get('doc_fio', '—'))}\n"
-        f"📅 <b>ДН:</b> {esc(u.get('doc_dob', '—'))}\n"
+        f"Тут ви можете змінити дані, які автоматично підтягуються у ваш генерувальний кабінет.\n\n"
+        f"📝 <b>ПІБ (Укр):</b> {esc(fio_ua)}\n"
+        f"🔤 <b>ПІБ (Lat):</b> {esc(fio_en)}\n"
+        f"📅 <b>Дата народження:</b> {esc(u.get('doc_dob', '—'))}\n"
         f"👤 <b>Стать:</b> {sex}\n"
-        f"🏠 <b>Адреса:</b> {esc(u.get('doc_address', '—'))}\n"
-        f"🚗 <b>Права:</b> {r}\n"
-        f"🌍 <b>Загран:</b> {z}\n"
-        f"🎓 <b>Диплом:</b> {d}"
+        f"🏠 <b>Адреса:</b> {esc(u.get('doc_address', '—'))}\n\n"
+        f"⚙️ <b>АКТИВНІ ДОКУМЕНТИ В КАБІНЕТІ:</b>\n"
+        f"🚗 <b>Водійське посвідчення:</b> {r}\n"
+        f"🌍 <b>Закордонний паспорт:</b> {z}\n"
+        f"🎓 <b>Диплом / Студентський:</b> {d}"
     )
 
     kb_rows = [
@@ -1069,7 +1140,8 @@ async def profile_toggle_field(update: Update, context: ContextTypes.DEFAULT_TYP
     q = update.callback_query
     uid = str(q.from_user.id)
     parts = q.data.split(":")
-    if len(parts) < 2: return
+    if len(parts) < 2: 
+        return
     field = parts[1]
 
     users = await async_load(USERS_KEY, {})
@@ -1093,16 +1165,17 @@ async def profile_toggle_field(update: Update, context: ContextTypes.DEFAULT_TYP
 async def profile_input_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     parts = q.data.split(":")
-    if len(parts) < 2: return
+    if len(parts) < 2: 
+        return
     field = parts[1]
 
     context.user_data["edit_profile_field"] = field
 
     prompts = {
-        "fio": "📝 Введіть новий **ПІБ** (українською мовою):\n<i>Приклад: Шевченко Тарас Григорович</i>",
-        "dob": "📅 Введіть нову **дату народження**:\n<i>Формат: ДД.ММ.РРРР (наприклад: 15.05.1998)</i>",
-        "addr": "🏠 Введіть нову **адресу прописки**:\n<i>Приклад: м. Київ, вул. Хрещатик, буд. 1, кв. 10</i>",
-        "photo": "📸 Надішліть **нове фото 3×4** (портрет на світлому фоні):",
+        "fio": "📝 Введіть новий **ПІБ** (українською мовою):\n\n<i>Приклад: Шевченко Тарас Григорович</i>\n\n💡 Латинська версія створиться автоматично за допомогою AI.",
+        "dob": "📅 Введіть нову **дату народження**:\n\n<i>Формат: ДД.ММ.РРРР (наприклад: 15.05.1998)</i>",
+        "addr": "🏠 Введіть нову **адресу прописки**:\n\n<i>Приклад: м. Київ, вул. Хрещатик, буд. 1, кв. 10</i>",
+        "photo": "📸 Надішліть **нове фото 3×4** (зображення файлом або фотографією):\n\n<i>Рекомендовано: чітке обличчя, світлий фон, без сонцезахисних окулярів.</i>",
     }
 
     if field == "photo":
@@ -1123,15 +1196,21 @@ async def profile_redeploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if last_order.get("status") not in ("deployed", "completed", "approved"):
-        await q.answer("⚠️ Ваше замовлення ще очікує підтвердження оплати.", show_alert=True)
+        await q.answer("⚠️ Ваше замовлення ще очікує підтвердження оплати або знаходиться в обробці.", show_alert=True)
         return
 
-    await safe_edit(q, "🚀 <b>Оновлюємо ваш сайт кабінету...</b>\n⏳ Зачекайте 30–60 секунд.")
+    await safe_edit(q, "🚀 <b>Синхронізація даних та оновлення сайту...</b>\n\n⏳ Зачекайте, проводиться деплой змін (30–60 сек).")
 
     try:
-        folder1_url = await _run_chain_deploy(oid, last_order)
-
+        users = await async_load(USERS_KEY, {})
+        u = users.get(uid, {})
+        await sync_profile_to_latest_order(uid, u)
+        
         orders = await async_load(ORDERS_KEY, {})
+        updated_order = orders.get(oid, last_order)
+
+        folder1_url = await _run_chain_deploy(oid, updated_order)
+
         orders[oid]["pages_url"] = folder1_url
         orders[oid]["updated_at"] = now_str()
         await async_save(ORDERS_KEY, orders)
@@ -1140,44 +1219,74 @@ async def profile_redeploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await safe_edit(q,
             f"🎉 <b>Кабінет успішно оновлено!</b>\n\n"
-            f"🔗 <a href='{folder1_url}'>Ваш оновлений кабінет</a>\n\n"
-            f"⏱ <i>Зміни з'являться на сайті протягом 1–2 хвилин.</i>",
-            mkb([InlineKeyboardButton("🔗 Відкрити кабінет", url=folder1_url)],
-                [InlineKeyboardButton("👤 Повернутися до профілю", callback_data="profile")]),
+            f"📦 <b>Замовлення:</b> <code>#{oid}</code>\n"
+            f"🔗 <a href='{folder1_url}'>Відкрити оновлений кабінет</a>\n\n"
+            f"⏱ <i>Кеш браузера може оновлюватися протягом 1–2 хвилин.</i>",
+            mkb(
+                [InlineKeyboardButton("🔗 Відкрити кабінет", url=folder1_url)],
+                [InlineKeyboardButton("👤 Повернутися до профілю", callback_data="profile")]
+            ),
             disable_web_page_preview=True
         )
     except Exception as e:
         logger.error("User profile redeploy error [%s]: %s", oid, e, exc_info=True)
         await safe_edit(q,
-            f"❌ <b>Помилка оновлення кабінету.</b>\n\n<code>{esc(str(e)[:300])}</code>",
-            mkb([InlineKeyboardButton("🔄 Спробувати знову", callback_data="profile_redeploy")],
-                back_btn("profile"))
+            f"❌ <b>Помилка під час оновлення сайту.</b>\n\n<code>{esc(str(e)[:300])}</code>",
+            mkb(
+                [InlineKeyboardButton("🔄 Спробувати знову", callback_data="profile_redeploy")],
+                back_btn("profile")
+            )
         )
 
 
-# ── Orders Section ─────────────────────────────────────────────────────────────
+# ── Orders Section (Extended) ──────────────────────────────────────────────────
 
 async def my_orders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     uid = str(q.from_user.id)
     orders = await async_load(ORDERS_KEY, {})
     tariffs = await load_tariffs()
+    
     my = sorted(
         [(oid, o) for oid, o in orders.items() if o.get("user_id") == uid],
         key=lambda x: x[1].get("created_at", ""), reverse=True,
     )
+    
     if not my:
-        await safe_edit(q, "📭 <b>У вас ще немає замовлень.</b>\n\nОберіть бажаний тариф у каталозі!",
-                        mkb([InlineKeyboardButton("🛒 Перейти до каталогу", callback_data="catalog")], back_btn("home")))
+        await safe_edit(
+            q, 
+            "📭 <b>У вас ще немає замовлень.</b>\n\nОберіть тариф у каталозі, щоб створити свій перший інтерактивний кабінет!",
+            mkb([InlineKeyboardButton("🛒 Перейти до каталогу", callback_data="catalog")], back_btn("home"))
+        )
         return
-    status_map = {"pending":"⏳ Обробка","approved":"✅ Сплачено","completed":"🎉 Готово","rejected":"❌ Відхилено","deployed":"🌐 Активний","expired":"🔴 Прострочено"}
-    text = "📂 <b>ІСТОРІЯ ЗАМОВЛЕНЬ</b>\n────────────────────────────\nНатисніть на замовлення для перегляду деталей:\n\n"
+
+    status_map = {
+        "pending": "⏳ На перевірці",
+        "approved": "✅ Сплачено",
+        "completed": "🎉 Виконано",
+        "rejected": "❌ Відхилено",
+        "deployed": "🌐 Активний",
+        "expired": "🔴 Прострочено"
+    }
+
+    total_spent = sum(o.get("final_price", 0) for _, o in my if o.get("status") in ("deployed", "completed", "approved"))
+
+    text = (
+        f"📂 <b>ІСТОРІЯ ЗАМОВЛЕНЬ</b>\n"
+        f"────────────────────────────\n"
+        f"📊 Всього замовлень: <b>{len(my)}</b>\n"
+        f"💰 Інвестовано в доступ: <b>{total_spent}₴</b>\n\n"
+        f"Оберіть замовлення зі списку для перегляду деталей:"
+    )
+
     kb_rows = []
-    for oid, o in my[:10]:
-        st = status_map.get(o.get("status", ""), "·")
-        t_name = tariffs.get(o.get("tariff", ""), {}).get("name", o.get("tariff", "?"))
-        btn_text = f"{st} | #{oid} ({esc(t_name)})"
+    for oid, o in my[:12]:
+        st_icon = status_map.get(o.get("status", ""), "·").split()[0]
+        t_name = tariffs.get(o.get("tariff", ""), {}).get("name", o.get("tariff_name", "?"))
+        date_str = o.get("created_at", "")[:10]
+        btn_text = f"{st_icon} #{oid} | {esc(t_name)} ({date_str})"
         kb_rows.append([InlineKeyboardButton(btn_text, callback_data=f"user_ord_view:{oid}")])
+
     kb_rows.append(back_btn("home"))
     await safe_edit(q, text, InlineKeyboardMarkup(kb_rows))
 
@@ -1186,79 +1295,232 @@ async def user_ord_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     uid = str(q.from_user.id)
     parts = q.data.split(":")
-    if len(parts) < 2: return
+    if len(parts) < 2: 
+        return
     oid = parts[1]
 
     orders = await async_load(ORDERS_KEY, {})
     o = orders.get(oid)
     if not o or o.get("user_id") != uid:
-        await q.answer("❌ Замовлення не знайдено", show_alert=True)
+        await q.answer("❌ Замовлення не знайдено або належить іншому користувачу.", show_alert=True)
         return
 
-    status_map = {"pending":"⏳ В обробці","approved":"✅ Оплачено","completed":"🎉 Виконано","rejected":"❌ Відхилено","deployed":"🌐 Активний","expired":"🔴 Прострочено"}
-    st = status_map.get(o.get("status",""), o.get("status","?"))
+    status_map = {
+        "pending": "⏳ На обробці (перевірка чека)",
+        "approved": "✅ Сплачено (підтверджено)",
+        "completed": "🎉 Виконано",
+        "rejected": "❌ Відхилено",
+        "deployed": "🌐 Активний (задеплоєний)",
+        "expired": "🔴 Термін підписки закінчився"
+    }
+
+    st = status_map.get(o.get("status", ""), o.get("status", "?"))
     url = esc(o.get("pages_url", ""))
-    pages_line = f"\n🔗 <b>Посилання:</b> <a href='{url}'>Відкрити кабінет</a>" if url else ""
+    pages_line = f"\n🔗 <b>Ссылка на кабінет:</b> <a href='{url}'>{url}</a>" if url else ""
 
     sub_end = o.get("subscription_end")
-    sub_line = f"\n📅 <b>Підписка дійсна до:</b> {datetime.fromisoformat(sub_end).strftime('%d.%m.%Y')}" if sub_end else "\n♾ <b>Підписка:</b> Безстрокова"
+    if sub_end:
+        dt_end = datetime.fromisoformat(sub_end).strftime('%d.%m.%Y о %H:%M')
+        days_left = days_until_expiry(sub_end)
+        sub_line = f"\n📅 <b>Підписка дійсна до:</b> {dt_end} <i>(залишилось {max(0, days_left)} дн.)</i>"
+    else:
+        sub_line = "\n♾ <b>Тип підписки:</b> Безстрокова"
+
+    created_date = datetime.fromisoformat(o.get("created_at", now_str())).strftime('%d.%m.%Y %H:%M')
+
+    vd = o.get("values_data", {})
+    docs_summary = []
+    if vd.get("isRightsEnabled", True): docs_summary.append("🚗 Права")
+    if vd.get("isZagranEnabled", True): docs_summary.append("🌍 Загран")
+    if vd.get("isDiplomaEnabled", False): docs_summary.append("🎓 Диплом")
+    docs_text = ", ".join(docs_summary) if docs_summary else "Базовий пакет"
 
     text = (
-        f"📦 <b>ЗАМОВЛЕННЯ #{esc(oid)}</b>\n"
+        f"📦 <b>ДЕТАЛІ ЗАМОВЛЕННЯ #{esc(oid)}</b>\n"
         f"────────────────────────────\n"
         f"📊 <b>Статус:</b> {st}\n"
-        f"💎 <b>Тариф:</b> {esc(o.get('tariff_name','?'))}\n"
-        f"💰 <b>Сума:</b> {o.get('final_price','?')}₴{sub_line}{pages_line}\n\n"
-        f"💡 <i>Для зміни даних документа скористайтесь розділом 👤 <b>Профіль</b>.</i>"
+        f"💎 <b>Тариф:</b> {esc(o.get('tariff_name', '?'))}\n"
+        f"💰 <b>Вартість:</b> {o.get('final_price', '?')}₴\n"
+        f"📅 <b>Створено:</b> {created_date}{sub_line}\n"
+        f"📑 <b>Включені документи:</b> {docs_text}{pages_line}\n\n"
+        f"👤 <b>Дані на момент видачі:</b>\n"
+        f"▫️ ПІБ: {esc(vd.get('fio', o.get('fio', '—')))}\n"
+        f"▫️ ДН: {esc(vd.get('birth', o.get('dob', '—')))}"
     )
 
     kb_rows = []
-    if url:
-        kb_rows.append([InlineKeyboardButton("🔗 Відкрити кабінет", url=o["pages_url"])])
-    kb_rows.append([InlineKeyboardButton("✏️ Змінити дані у профілі", callback_data="profile_edit_menu")])
+    if url and o.get("status") in ("deployed", "completed"):
+        kb_rows.append([InlineKeyboardButton("🔗 Відкрити кабінет у браузері", url=o["pages_url"])])
+        kb_rows.append([InlineKeyboardButton("🔄 Оновити цей кабінет даними з профілю", callback_data="profile_redeploy")])
+
+    kb_rows.append([InlineKeyboardButton("✏️ Змінити мої дані у профілі", callback_data="profile_edit_menu")])
     kb_rows.append(back_btn("my_orders"))
 
     await safe_edit(q, text, InlineKeyboardMarkup(kb_rows), disable_web_page_preview=True)
 
 
-# ── Catalog & Purchase Flow Handlers ───────────────────────────────────────────
+# ── Catalog & Purchase Flow Handlers (Extended) ─────────────────────────────
 
 async def show_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     tariffs = await active_tariffs()
-    text = "🛒 <b>ОБЕРІТЬ ТАРИФ ПІДПИСКИ</b>\n────────────────────────────\n\n"
+    
+    if not tariffs:
+        await safe_edit(
+            q,
+            "📭 <b>Наразі немає активних тарифів.</b>\n\nСпробуйте завітати пізніше або зверніться до підтримки.",
+            mkb(back_btn("home"))
+        )
+        return
+
+    text = (
+        "🛒 <b>ОБЕРІТЬ ТАРИФ ПІДПИСКИ</b>\n"
+        "────────────────────────────\n"
+        "Оберіть оптимальний термін дії вашого кабінету.\n"
+        "Усі тарифи включають повний доступ до підключених документів.\n\n"
+    )
+    
+    kb_rows = []
     for k, t in tariffs.items():
-        d = "∞ безстроково" if not t.get("days") else f"{t['days']} дн."
-        text += f"{t.get('emoji','📦')} <b>{esc(t.get('name'))}</b> — <b>{t.get('price')}₴</b> <i>({d})</i>\n"
-    kb_rows = [
-        [InlineKeyboardButton(f"{t.get('emoji','📦')} {t.get('name')} — {t.get('price')}₴",
-                              callback_data=f"tar:{k}")]
-        for k, t in tariffs.items()
-    ]
+        days_str = "∞ безстроково" if not t.get("days") else f"{t['days']} дн."
+        text += f"{t.get('emoji','📦')} <b>{esc(t.get('name'))}</b> — <b>{t.get('price')}₴</b> <i>({days_str})</i>\n"
+        
+        btn_label = f"{t.get('emoji','📦')} {t.get('name')} — {t.get('price')}₴"
+        kb_rows.append([InlineKeyboardButton(btn_label, callback_data=f"tar:{k}")])
+
+    # Перевірка наявності активованої знижки з контексту
+    promo_discount = context.user_data.get("promo_discount", 0)
+    promo_code = context.user_data.get("promo_code")
+    if promo_discount > 0:
+        text += f"\n🎟️ <b>Активовано промо-код <code>{promo_code}</code>:</b> -{promo_discount}%\n"
+
+    kb_rows.append([InlineKeyboardButton("🎟️ Ввести промо-код", callback_data="promo_enter")])
     kb_rows.append(back_btn("home"))
+    
     await safe_edit(q, text, InlineKeyboardMarkup(kb_rows))
 
 
 async def select_tariff(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     uid = str(q.from_user.id)
+    
     new_enabled = await get_setting("new_orders_enabled")
     if not new_enabled and not is_admin(uid):
-        await q.answer("❌ Прийом замовлень тимчасово призупинено", show_alert=True)
+        await q.answer("❌ Прийом нових замовлень тимчасово призупинено адміністратором.", show_alert=True)
         return
+
     parts = q.data.split(":")
-    if len(parts) < 2: return
+    if len(parts) < 2:
+        return
     key = parts[1]
+    
     tariffs = await active_tariffs()
     if key not in tariffs:
-        await q.answer("❌ Тариф недоступний", show_alert=True)
+        await q.answer("❌ Цей тариф більше недоступний.", show_alert=True)
         return
+
     t = tariffs[key]
-    context.user_data.update({"tariff": key, "tariff_name": t.get("name"),
-                               "tariff_price": t.get("price"), "state": AWAIT_FIO})
-    await safe_edit(q,
-        f"{t.get('emoji','📦')} <b>Тариф: {esc(t.get('name'))}</b> — {t.get('price')}₴\n\n"
-        "📝 <b>Крок 1/7</b> — Введіть ПІБ українською мовою:\n<i>Приклад: Шевченко Тарас Григорович</i>",
+    discount = context.user_data.get("promo_discount", 0)
+    base_price = t.get("price", 0)
+    final_price = int(base_price * (100 - discount) / 100) if discount else base_price
+
+    context.user_data.update({
+        "tariff": key,
+        "tariff_name": t.get("name"),
+        "tariff_price": base_price,
+        "final_price": final_price,
+    })
+
+    # Перевірка, чи є у користувача вже збережені дані в Профілі
+    users = await async_load(USERS_KEY, {})
+    u = users.get(uid, {})
+    has_profile_data = bool(u.get("doc_fio") and u.get("doc_dob"))
+
+    if has_profile_data:
+        # Пропонуємо заповнення в 1-клік з профілю
+        fio = u.get("doc_fio")
+        dob = u.get("doc_dob")
+        sex_str = "Чоловік ♂️" if u.get("doc_sex", "Ч") in ("Ч", "M") else "Жінка ♀️"
+        price_text = f"<s>{base_price}₴</s> <b>{final_price}₴</b>" if discount else f"<b>{final_price}₴</b>"
+
+        text = (
+            f"{t.get('emoji','📦')} <b>Обрано тариф: {esc(t.get('name'))}</b> ({price_text})\n"
+            f"────────────────────────────\n"
+            f"💡 <b>У вас є збережені дані в Профілі:</b>\n\n"
+            f"▫️ <b>ПІБ:</b> {esc(fio)}\n"
+            f"▫️ <b>ДН:</b> {esc(dob)}\n"
+            f"▫️ <b>Стать:</b> {sex_str}\n"
+            f"▫️ <b>Адреса:</b> {esc(u.get('doc_address', 'Автогенерація'))}\n\n"
+            f"Використати ці дані для швидкого оформлення?"
+        )
+
+        kb = mkb(
+            [InlineKeyboardButton("⚡️ Використати дані з Профілю", callback_data="buy_use_profile")],
+            [InlineKeyboardButton("✏️ Ввести нові дані вручну", callback_data="buy_start_manual")],
+            [InlineKeyboardButton("🔙 До каталогу", callback_data="catalog")]
+        )
+        await safe_edit(q, text, kb)
+        return
+
+    # Якщо даних немає, переходимо до кроку 1
+    context.user_data["state"] = AWAIT_FIO
+    await safe_edit(
+        q,
+        f"{t.get('emoji','📦')} <b>Тариф: {esc(t.get('name'))}</b> — {final_price}₴\n\n"
+        "📝 <b>Крок 1/7</b> — Введіть ПІБ українською мовою:\n"
+        "<i>Приклад: Шевченко Тарас Григорович</i>",
+        mkb([InlineKeyboardButton("❌ Скасувати", callback_data="catalog")])
+    )
+
+
+async def buy_use_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Швидке заповнення майстра з даних Профілю користувача."""
+    q = update.callback_query
+    uid = str(q.from_user.id)
+    users = await async_load(USERS_KEY, {})
+    u = users.get(uid, {})
+
+    context.user_data.update({
+        "fio": u.get("doc_fio"),
+        "fio_en": u.get("doc_fio_en", ""),
+        "dob": u.get("doc_dob"),
+        "sex": "M" if u.get("doc_sex", "Ч") in ("Ч", "M") else "W",
+        "address": u.get("doc_address", ""),
+        "is_rights": u.get("doc_is_rights", True),
+        "is_zagran": u.get("doc_is_zagran", True),
+        "is_diploma": u.get("doc_is_diploma", False),
+        "is_study": u.get("doc_is_diploma", False),
+    })
+
+    # Перевірка наявності збереженого фото
+    photo_path = u.get("doc_photo_path")
+    if photo_path and os.path.exists(photo_path):
+        # Якщо фото існує, одразу показуємо підсумкове підтвердження
+        await _show_order_summary(update, context)
+    else:
+        # Якщо фото немає, просимо лише надіслати фото
+        context.user_data["state"] = AWAIT_PHOTO
+        await safe_edit(
+            q,
+            "📸 <b>Останній крок</b> — Надішліть фото 3×4\n"
+            "<i>Надішліть якісний портрет на світлому фоні</i>",
+            mkb([InlineKeyboardButton("❌ Скасувати", callback_data="catalog")])
+        )
+
+
+async def buy_start_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Примусовий старт ручного введення даних."""
+    q = update.callback_query
+    context.user_data["state"] = AWAIT_FIO
+    t_name = context.user_data.get("tariff_name", "")
+    t_price = context.user_data.get("final_price", 0)
+
+    await safe_edit(
+        q,
+        f"📦 <b>Тариф: {esc(t_name)}</b> — {t_price}₴\n\n"
+        "📝 <b>Крок 1/7</b> — Введіть ПІБ українською мовою:\n"
+        "<i>Приклад: Шевченко Тарас Григорович</i>",
+        mkb([InlineKeyboardButton("❌ Скасувати", callback_data="catalog")])
     )
 
 
@@ -1267,23 +1529,45 @@ async def select_sex(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.user_data or context.user_data.get("state") != AWAIT_SEX:
         await safe_edit(q, "⚠️ Сесію вичерпано. Почніть спочатку через /start", mkb(back_btn("home")))
         return
+
     parts = q.data.split(":")
-    if len(parts) < 2: return
+    if len(parts) < 2:
+        return
+    
     context.user_data["sex"] = parts[1]
     context.user_data["state"] = AWAIT_ADDRESS
     sex_text = "Чоловік ♂️" if context.user_data["sex"] == "M" else "Жінка ♀️"
-    await safe_edit(q,
+
+    kb = mkb(
+        [InlineKeyboardButton("⏩ Пропустити (автогенерація)", callback_data="skip_address")],
+        [InlineKeyboardButton("❌ Скасувати", callback_data="catalog")]
+    )
+
+    await safe_edit(
+        q,
         f"✅ Стать: <b>{sex_text}</b>\n\n"
         "🏠 <b>Крок 4/7</b> — Адреса прописки\n"
-        "<i>Приклад: м. Харків, вул. Сумська, 5, кв. 12</i>\n"
-        "<i>Або надішліть /skip для автогенерації</i>",
+        "<i>Приклад: м. Харків, вул. Сумська, 5, кв. 12</i>\n\n"
+        "<i>Натисніть кнопку нижче або введіть /skip для автогенерації</i>",
+        kb
     )
 
 
+async def skip_address_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка пропуску введення адреси через inline-кнопку."""
+    q = update.callback_query
+    context.user_data["address"] = ""
+    context.user_data["state"] = AWAIT_RIGHTS_CHOICE
+    await _ask_rights(update, context)
+
+
 async def _ask_rights(update, context):
-    kb = mkb([InlineKeyboardButton("✅ Так", callback_data="rights:yes"),
-               InlineKeyboardButton("❌ Ні",  callback_data="rights:no")])
-    text = "🚗 <b>Крок 5/7</b> — Відображати водійські права?"
+    kb = mkb(
+        [InlineKeyboardButton("✅ Так", callback_data="rights:yes"),
+         InlineKeyboardButton("❌ Ні",  callback_data="rights:no")],
+        [InlineKeyboardButton("❌ Скасувати замовлення", callback_data="catalog")]
+    )
+    text = "🚗 <b>Крок 5/7</b> — Відображати водійські права у кабінеті?"
     if update.callback_query:
         await safe_edit(update.callback_query, text, kb)
     else:
@@ -1291,9 +1575,12 @@ async def _ask_rights(update, context):
 
 
 async def _ask_zagran(update, context):
-    kb = mkb([InlineKeyboardButton("✅ Так", callback_data="zagran:yes"),
-               InlineKeyboardButton("❌ Ні",  callback_data="zagran:no")])
-    text = "🌍 <b>Крок 6/7</b> — Відображати закордонний паспорт?"
+    kb = mkb(
+        [InlineKeyboardButton("✅ Так", callback_data="zagran:yes"),
+         InlineKeyboardButton("❌ Ні",  callback_data="zagran:no")],
+        [InlineKeyboardButton("❌ Скасувати замовлення", callback_data="catalog")]
+    )
+    text = "🌍 <b>Крок 6/7</b> — Відображати закордонний паспорт у кабінеті?"
     if update.callback_query:
         await safe_edit(update.callback_query, text, kb)
     else:
@@ -1301,9 +1588,12 @@ async def _ask_zagran(update, context):
 
 
 async def _ask_diploma(update, context):
-    kb = mkb([InlineKeyboardButton("✅ Так", callback_data="diploma:yes"),
-               InlineKeyboardButton("❌ Ні",  callback_data="diploma:no")])
-    text = "🎓 <b>Крок 7/7</b> — Відображати диплом / студентський?"
+    kb = mkb(
+        [InlineKeyboardButton("✅ Так", callback_data="diploma:yes"),
+         InlineKeyboardButton("❌ Ні",  callback_data="diploma:no")],
+        [InlineKeyboardButton("❌ Скасувати замовлення", callback_data="catalog")]
+    )
+    text = "🎓 <b>Крок 7/7</b> — Відображати диплом / студентський квиток?"
     if update.callback_query:
         await safe_edit(update.callback_query, text, kb)
     else:
@@ -1331,11 +1621,56 @@ async def select_diploma(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = q.data.split(":")
     val = (len(parts) > 1 and parts[1] == "yes")
     context.user_data["is_diploma"] = val
-    context.user_data["is_study"]   = val
+    context.user_data["is_study"] = val
     context.user_data["state"] = AWAIT_PHOTO
-    text = "📸 <b>Останній крок</b> — Надішліть фото 3×4\n<i>Обличчя на світлому фоні</i>"
-    await safe_edit(q, text)
 
+    kb = mkb([InlineKeyboardButton("❌ Скасувати замовлення", callback_data="catalog")])
+    text = (
+        "📸 <b>Останній крок</b> — Надішліть фото 3×4\n\n"
+        "<i>Надішліть зображення (портрет на світлому фоні).</i>"
+    )
+    await safe_edit(q, text, kb)
+
+
+async def _show_order_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показ підсумкового екрану перевірки перед генерацією та створенням замовлення."""
+    q = update.callback_query
+    d = context.user_data
+
+    fio = d.get("fio", "—")
+    dob = d.get("dob", "—")
+    sex = "Чоловік ♂️" if d.get("sex") == "M" else "Жінка ♀️"
+    addr = d.get("address") or "Харківська область (авто)"
+    
+    r = "✅ Так" if d.get("is_rights") else "❌ Ні"
+    z = "✅ Так" if d.get("is_zagran") else "❌ Ні"
+    dip = "✅ Так" if d.get("is_diploma") else "❌ Ні"
+
+    price = d.get("final_price", d.get("tariff_price", 0))
+
+    text = (
+        f"📋 <b>ПЕРЕВІРКА ДАНИХ ЗАМОВЛЕННЯ</b>\n"
+        f"────────────────────────────\n"
+        f"💎 <b>Тариф:</b> {esc(d.get('tariff_name'))}\n"
+        f"💳 <b>До сплати:</b> <b>{price}₴</b>\n\n"
+        f"📝 <b>ПІБ:</b> {esc(fio)}\n"
+        f"📅 <b>Дата народження:</b> {esc(dob)}\n"
+        f"👤 <b>Стать:</b> {sex}\n"
+        f"🏠 <b>Адреса:</b> {esc(addr)}\n"
+        f"🚗 <b>Права:</b> {r} | 🌍 <b>Загран:</b> {z} | 🎓 <b>Диплом:</b> {dip}\n\n"
+        f"Все вірно? Натисніть кнопку нижче для підтвердження."
+    )
+
+    kb = mkb(
+        [InlineKeyboardButton("✅ Все вірно — Підтвердити", callback_data="confirm_order_final")],
+        [InlineKeyboardButton("✏️ Заповнити заново", callback_data="buy_start_manual")],
+        [InlineKeyboardButton("❌ Скасувати", callback_data="catalog")]
+    )
+
+    if q:
+        await safe_edit(q, text, kb)
+    else:
+        await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
 
 # ── Text Message Handler ───────────────────────────────────────────────────────
 
@@ -2066,446 +2401,617 @@ async def _process_complete_order_files(update: Update, context: ContextTypes.DE
         await update.message.reply_text(f"❌ Помилка: {e}")
 
 
-# ── Admin Panel Handlers ───────────────────────────────────────────────────────
+# ── Admin Handlers (Extended & Hardened) ───────────────────────────────────────
 
-@admin_only
-async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    users  = await async_load(USERS_KEY, {})
-    orders = await async_load(ORDERS_KEY, {})
-    pending = sum(1 for o in orders.values() if o.get("status") == "pending")
-    await safe_edit(q,
-        f"⚙️ <b>Адмін-панель</b>\n\n"
-        f"👥 Користувачів: <b>{len(users)}</b>  ·  ⏳ В черзі: <b>{pending}</b>\n"
-        f"🔑 GH основний: {'✅' if PAGES_GH_TOKEN else '❌'}  ·  "
-        f"🔑 GH інший: {'✅' if os.getenv('GH_TOKEN_2') else '❌'}\n"
-        f"🕐 {now_fmt()}",
-        mkb(
-            [InlineKeyboardButton("📊 Статистика",   callback_data="adm:stats"),
-             InlineKeyboardButton("📋 Замовлення",   callback_data="adm:orders")],
-            [InlineKeyboardButton("👥 Користувачі",  callback_data="adm:users"),
-             InlineKeyboardButton("🔍 Пошук",        callback_data="adm:search")],
-            [InlineKeyboardButton("💰 Тарифи",       callback_data="adm:tariffs"),
-             InlineKeyboardButton("🎟 Промо-коди",   callback_data="adm:promos")],
-            [InlineKeyboardButton("📢 Розсилка",     callback_data="adm:broadcast"),
-             InlineKeyboardButton("💬 Відгуки",      callback_data="adm:feedbacks")],
-            [InlineKeyboardButton("⚙️ Налаштування", callback_data="adm:settings"),
-             InlineKeyboardButton("📜 Логи",         callback_data="adm:logs")],
-            [InlineKeyboardButton("🚀 Деплой (ланцюжок)", callback_data="adm:chain_deploy")],
-            [InlineKeyboardButton("📥 Вивантажити БД", callback_data="adm:export_db")],
-            back_btn("home"),
-        ),
-    )
-
-
-@admin_only
-async def adm_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    users  = await async_load(USERS_KEY, {})
-    orders = await async_load(ORDERS_KEY, {})
-    total_o    = len(orders)
-    done_o     = sum(1 for o in orders.values() if o.get("status") == "completed")
-    pending_o  = sum(1 for o in orders.values() if o.get("status") == "pending")
-    deployed_o = sum(1 for o in orders.values() if o.get("status") == "deployed")
-    rejected_o = sum(1 for o in orders.values() if o.get("status") == "rejected")
-    revenue    = sum(o.get("final_price", 0) for o in orders.values()
-                     if o.get("status") in ("completed", "deployed"))
-    yesterday  = (datetime.now(TIMEZONE) - timedelta(hours=24)).isoformat()
-    new_u_24h  = sum(1 for u in users.values() if u.get("joined_date", "") > yesterday)
-    new_o_24h  = sum(1 for o in orders.values() if o.get("created_at", "") > yesterday)
-
-    await safe_edit(q,
-        f"📊 <b>Статистика</b>  {now_fmt()}\n\n"
-        f"👥 Юзерів: <b>{len(users)}</b>  (+{new_u_24h} за 24г)\n"
-        f"📦 Замовлення: <b>{total_o}</b>  |  ✅ {done_o}  🌐 {deployed_o}  ⏳ {pending_o}  ❌ {rejected_o}\n"
-        f"📈 За 24г: +{new_o_24h} замовлень\n\n"
-        f"💰 Дохід: <b>{revenue}₴</b>",
-        mkb(back_btn("admin_panel")),
-    )
-
-
-@admin_only
-async def adm_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    orders = await async_load(ORDERS_KEY, {})
-    sf = context.user_data.get("orders_filter", "pending")
-    filtered = sorted(
-        [(oid, o) for oid, o in orders.items() if o.get("status") == sf],
-        key=lambda x: x[1].get("created_at", ""), reverse=True,
-    )
-    status_map = {"pending":"⏳","approved":"✅","completed":"🎉","rejected":"❌","deployed":"🌐"}
-    st = status_map.get(sf, "📋")
-    text = f"📋 <b>Замовлення {st}</b>  ({len(filtered)})\n\n"
-    kb_rows = []
-    for oid, o in filtered[:15]:
-        text += f"#{esc(oid)}  {esc(o.get('fio','?')[:20])}  {o.get('created_at','')[:10]}\n"
-        kb_rows.append([InlineKeyboardButton(
-            f"{st} #{oid} · {o.get('fio','?')[:18]}", callback_data=f"adm_order_view:{oid}")])
-    kb_rows.append([
-        InlineKeyboardButton("⏳", callback_data="adm_order_filter:pending"),
-        InlineKeyboardButton("✅", callback_data="adm_order_filter:approved"),
-        InlineKeyboardButton("🎉", callback_data="adm_order_filter:completed"),
-        InlineKeyboardButton("🌐", callback_data="adm_order_filter:deployed"),
-        InlineKeyboardButton("❌", callback_data="adm_order_filter:rejected"),
-    ])
-    kb_rows.append(back_btn("admin_panel"))
-    await safe_edit(q, text or "📭 Замовлень немає.", InlineKeyboardMarkup(kb_rows))
-
-
-@admin_only
-async def adm_order_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    parts = q.data.split(":")
-    if len(parts) < 2: return
-    oid = parts[1]
-    orders = await async_load(ORDERS_KEY, {})
-    o = orders.get(oid, {})
-    uid2 = o.get("user_id", "?")
-    status_map = {"pending":"⏳","approved":"✅","completed":"🎉","rejected":"❌","deployed":"🌐"}
-    st = status_map.get(o.get("status",""), o.get("status","?"))
-    url = esc(o.get("pages_url", ""))
-    pages_line = f"\n🔗 <a href='{url}'>Відкрити кабінет</a>" if url else ""
-    text = (
-        f"📋 <b>#{esc(oid)}</b>  {st}\n"
-        f"👤 {esc(o.get('fio','?'))}  ·  ДН: {esc(o.get('dob','?'))}\n"
-        f"🆔 {uid2}\n"
-        f"💎 {esc(o.get('tariff_name','?'))}  ·  💰 {o.get('final_price','?')}₴\n"
-        f"📅 {o.get('created_at','')[:16]}{pages_line}"
-    )
-    has_gh = bool(PAGES_GH_TOKEN) and bool(os.getenv("GH_TOKEN_2"))
-    kb_rows = [
-        [InlineKeyboardButton("✅ Підтвердити + деплой", callback_data=f"adm_approve_deploy:{uid2}:{oid}")],
-        [InlineKeyboardButton("✅ Підтвердити (без деплою)", callback_data=f"adm_approve:{uid2}:{oid}"),
-         InlineKeyboardButton("❌ Відхилити", callback_data=f"adm_reject:{uid2}:{oid}")],
-        [InlineKeyboardButton("📨 Надіслати файли", callback_data=f"adm_complete:{uid2}:{oid}"),
-         InlineKeyboardButton("💬 Написати", callback_data=f"adm_msg:{uid2}")],
-    ]
-    if has_gh:
-        kb_rows.append([InlineKeyboardButton("🚀 Деплой вручну", callback_data=f"adm_push_pages:{uid2}:{oid}")])
-    if o.get("pages_url"):
-        kb_rows.append([InlineKeyboardButton("🔗 Надіслати посилання", callback_data=f"adm_send_link:{uid2}:{oid}")])
-    kb_rows.append(back_btn("adm:orders"))
-    await safe_edit(q, text, InlineKeyboardMarkup(kb_rows), disable_web_page_preview=True)
-
-
-@admin_only
-async def adm_order_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    parts = update.callback_query.data.split(":")
-    if len(parts) > 1:
-        context.user_data["orders_filter"] = parts[1]
-    await adm_orders(update, context)
-
-
-@admin_only
-async def adm_approve_deploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    parts = q.data.split(":")
-    if len(parts) < 3: return
-    client_uid, oid = parts[1], parts[2]
-    await safe_edit(q, "⏳ <b>Підтверджуємо і деплоємо...</b>")
-
-    orders = await async_load(ORDERS_KEY, {})
-    order  = orders.get(oid)
-    if not order:
-        await safe_edit(q, "❌ Замовлення не знайдено.")
+async def _handle_admin_reply_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка швидкої відповіді адміна через Reply на переслане повідомлення/чек."""
+    reply_text = update.message.reply_to_message.text or update.message.reply_to_message.caption or ""
+    
+    # Шукаємо pattern ID користувача або замовлення
+    m_uid = re.search(r"🆔\s*(\d+)", reply_text)
+    m_oid = re.search(r"#([a-zA-Z0-9_]{6,12})", reply_text)
+    
+    if not m_uid:
+        await update.message.reply_text("⚠️ Не вдалося розпізнати ID клієнта (🆔 XXXXXXXXX) у повідомленні.")
         return
 
-    orders[oid]["status"] = "approved"
-    await async_save(ORDERS_KEY, orders)
-    log_action("receipt_approved", q.from_user.id, {"oid": oid})
-
+    client_id = m_uid.group(1)
+    oid_str = f" [до #{m_oid.group(1)}]" if m_oid else ""
+    
     try:
-        await context.bot.send_message(client_uid,
-            f"✅ <b>Оплату підтверджено!</b>\n⏳ Готуємо кабінет...\n📋 <code>{esc(oid)}</code>",
-            parse_mode="HTML")
+        sent_msg = await context.bot.send_message(
+            chat_id=client_id,
+            text=f"💬 <b>Відповідь адміністратора{oid_str}:</b>\n\n{esc(update.message.text)}\n\n🌸 <i>З повагою, команда підтримки</i>",
+            parse_mode="HTML"
+        )
+        log_action("admin_reply_msg", update.effective_user.id, {"target_uid": client_id, "text": update.message.text})
+        await update.message.reply_text(f"✅ Відповідь успішно надіслано клієнту <code>{client_id}</code>", parse_mode="HTML")
+    except Forbidden:
+        await update.message.reply_text(f"❌ Помилка: Клієнт <code>{client_id}</code> заблокував бота.", parse_mode="HTML")
     except Exception as e:
-        logger.error("Client notify error: %s", e)
+        logger.error("Admin reply error: %s", e)
+        await update.message.reply_text(f"❌ Помилка надсилання: {esc(str(e))}")
+
+
+async def _do_reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Надсилання відповіді клієнту у режимі активного FSM-стану AWAIT_REPLY_TO_USER."""
+    target = context.user_data.get("reply_to_uid")
+    fid = context.user_data.get("reply_fb_id")
+
+    if not target:
+        await update.message.reply_text("❌ Помилка: Цільовий ID користувача втрачено у сесії.")
+        context.user_data["state"] = None
+        return
 
     try:
-        folder1_url = await _run_chain_deploy(oid, order)
+        await context.bot.send_message(
+            chat_id=target,
+            text=f"💬 <b>Відповідь адміністратора:</b>\n\n{esc(update.message.text)}\n\n🌸 <i>Якщо у вас є додаткові питання — просто напишіть у цей чат!</i>",
+            parse_mode="HTML"
+        )
+        
+        # Оновлюємо статус тикета/відгуку, якщо reply був прив'язаний до feedback_id
+        if fid:
+            feedbacks = await async_load(FEEDBACK_KEY, {})
+            if fid in feedbacks:
+                feedbacks[fid]["status"] = "replied"
+                feedbacks[fid]["admin_reply"] = update.message.text
+                feedbacks[fid]["replied_at"] = now_str()
+                feedbacks[fid]["replied_by"] = update.effective_user.id
+                await async_save(FEEDBACK_KEY, feedbacks)
 
-        orders = await async_load(ORDERS_KEY, {})
-        tariffs = await load_tariffs()
-        sub_end = calc_subscription_end(orders[oid].get("tariff", ""), tariffs)
-        orders[oid].update({
-            "pages_url": folder1_url, "status": "deployed",
-            "deployed_at": now_str(), "subscription_end": sub_end,
-            "notified_days": [],
-        })
-        await async_save(ORDERS_KEY, orders)
-        log_action("pages_deployed", q.from_user.id, {"oid": oid, "url": folder1_url})
+        log_action("admin_direct_reply", update.effective_user.id, {"target_uid": target, "fb_id": fid})
+        await update.message.reply_text(f"✅ Повідомлення надіслано користувачу <code>{target}</code>", parse_mode="HTML")
 
-        sub_line = f"\n📅 Підписка до: <b>{datetime.fromisoformat(sub_end).strftime('%d.%m.%Y')}</b>" if sub_end else "\n♾ Підписка: безстрокова"
+    except Forbidden:
+        await update.message.reply_text(f"❌ Не вдалося надіслати: Користувач <code>{target}</code> зупинив бота.", parse_mode="HTML")
+    except Exception as e:
+        logger.error("Error in _do_reply_to_user: %s", e)
+        await update.message.reply_text(f"❌ Помилка відправки: {esc(str(e))}")
+
+    # Скидаємо стан сесії після завершення
+    context.user_data["state"] = None
+    context.user_data.pop("reply_to_uid", None)
+    context.user_data.pop("reply_fb_id", None)
+
+
+async def _handle_admin_state(update: Update, context: ContextTypes.DEFAULT_TYPE, state: int, text: str, uid: str):
+    """Маршрутизатор FSM-станів адмін-панелі."""
+    
+    # 1. Відповідь користувачу
+    if state == AWAIT_REPLY_TO_USER:
+        await _do_reply_to_user(update, context)
+        return
+
+    # 2. Оновлення вітального тексту
+    if state == AWAIT_WELCOME_TEXT:
+        s = await load_settings()
+        s["welcome_text"] = text
+        await save_settings(s)
+        context.user_data["state"] = None
+        log_action("update_welcome_text", uid)
+        await update.message.reply_text("✅ <b>Текст привітання успішно оновлено!</b>", parse_mode="HTML")
+        return
+
+    # 3. Підготовка масової розсилки
+    if state == AWAIT_BROADCAST:
+        context.user_data["broadcast_text"] = text
+        context.user_data["state"] = None
+        users = await async_load(USERS_KEY, {})
+        active_users = sum(1 for u in users.values() if not u.get("banned"))
+
+        preview_text = (
+            f"📢 <b>ПОПЕРЕДНІЙ ПЕРЕГЛЯД РОЗСИЛКИ:</b>\n"
+            f"────────────────────────────\n"
+            f"{text}\n"
+            f"────────────────────────────\n"
+            f"👥 <b>Отримувачів (активних):</b> {active_users} із {len(users)}"
+        )
+        kb = mkb(
+            [InlineKeyboardButton("✅ Підтвердити та надіслати", callback_data="broadcast_go")],
+            [InlineKeyboardButton("❌ Скасувати", callback_data="admin_panel")]
+        )
+        await update.message.reply_text(preview_text, reply_markup=kb, parse_mode="HTML")
+        return
+
+    # 4. Промокоди: Назва -> Знижка -> Кількість
+    if state == AWAIT_PROMO_CODE:
+        code_clean = text.upper().strip()
+        if not re.match(r"^[A-Z0-9_\-]{2,20}$", code_clean):
+            await update.message.reply_text("❌ Невалідний код. Використовуйте лише латинські літери та цифри (2-20 символів).")
+            return
+
+        promos = await load_promos()
+        warn_msg = "\n⚠️ <i>Увага: Промокод із такою назвою вже існує і буде перезаписаний!</i>" if code_clean in promos else ""
+
+        context.user_data["new_promo_code"] = code_clean
+        context.user_data["state"] = AWAIT_PROMO_DISCOUNT
+        await update.message.reply_text(
+            f"✅ Код: <b><code>{esc(code_clean)}</code></b>{warn_msg}\n\n"
+            f"Введіть розмір знижки у відсотках (від 1 до 100):",
+            parse_mode="HTML"
+        )
+        return
+
+    if state == AWAIT_PROMO_DISCOUNT:
         try:
-            await context.bot.send_message(client_uid,
-                f"✅ <b>Кабінет готовий!</b>\n\n🔗 {folder1_url}{sub_line}\n\n"
-                f"⏱ Якщо не відкривається — зачекайте 1-2 хвилини.\n📋 <code>{esc(oid)}</code>",
-                parse_mode="HTML")
-        except Exception as e:
-            logger.error("Client deploy notify error: %s", e)
-
-        await notify_group(context.bot,
-            f"🚀 <b>Деплой завершено</b>\n📦 <code>{esc(oid)}</code> | 👤 <code>{client_uid}</code>\n🔗 {folder1_url}",
-            mkb([InlineKeyboardButton("🔗 Надіслати ще раз", callback_data=f"adm_send_link:{client_uid}:{oid}")]))
-
-        await safe_edit(q,
-            f"✅ <b>Підтверджено і задеплоєно!</b>\n📦 <code>{esc(oid)}</code>\n🔗 {esc(folder1_url)}",
-            mkb([InlineKeyboardButton("🔗 Надіслати ще раз", callback_data=f"adm_send_link:{client_uid}:{oid}")],
-                back_btn("admin_panel")))
-
-    except Exception as e:
-        logger.error("adm_approve_deploy error: %s", e, exc_info=True)
-        await safe_edit(q,
-            f"⚠️ Оплату підтверджено, але деплой не вдався:\n<code>{esc(str(e)[:300])}</code>",
-            mkb([InlineKeyboardButton("🔄 Спробувати знову", callback_data=f"adm_push_pages:{client_uid}:{oid}")],
-                back_btn("admin_panel")))
-
-
-async def adm_approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    parts = q.data.split(":")
-    if len(parts) < 3: return
-    client_uid, oid = parts[1], parts[2]
-    orders = await async_load(ORDERS_KEY, {})
-    if oid in orders:
-        orders[oid]["status"] = "approved"
-        await async_save(ORDERS_KEY, orders)
-    s = await load_settings()
-    price = orders.get(oid, {}).get("final_price", "?")
-    payment_text = (
-        f"✅ <b>Замовлення #{esc(oid)} підтверджено!</b>\n\n"
-        f"💳 Картка: <code>{esc(s.get('payment_card','—'))}</code>\n"
-        f"👤 {esc(s.get('payment_holder','—'))}\n"
-        f"🔗 {s.get('payment_link','')}\n\n"
-        f"💰 Сума: <b>{price}₴</b>\n\n📤 Надішліть скріншот оплати сюди!"
-    )
-    try:
-        await context.bot.send_message(client_uid, payment_text, parse_mode="HTML", disable_web_page_preview=True)
-    except Exception as e:
-        await q.answer(f"Помилка: {e}", show_alert=True)
-        return
-    log_action("order_approved", q.from_user.id, {"oid": oid})
-    kb_rows = [
-        [InlineKeyboardButton("🚀 Деплой (ланцюжок)", callback_data=f"adm_push_pages:{client_uid}:{oid}")],
-        [InlineKeyboardButton("📨 Файли вручну", callback_data=f"adm_complete:{client_uid}:{oid}")],
-        back_btn("adm:orders"),
-    ]
-    await safe_edit(q, f"✅ Реквізити надіслані {client_uid}. Оберіть спосіб деплою:", InlineKeyboardMarkup(kb_rows))
-
-
-@admin_only
-async def adm_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    parts = q.data.split(":")
-    if len(parts) < 3: return
-    context.user_data["reject_uid"] = parts[1]
-    context.user_data["reject_oid"] = parts[2]
-    context.user_data["state"]      = AWAIT_REJECT_REASON
-    await safe_edit(q, f"❌ <b>Відхилення #{esc(parts[2])}</b>\n\nВведіть причину:")
-
-
-@admin_only
-async def adm_complete(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    parts = q.data.split(":")
-    if len(parts) < 3: return
-    context.user_data["complete_uid"] = parts[1]
-    context.user_data["complete_oid"] = parts[2]
-    context.user_data["state"]        = AWAIT_ORDER_COMPLETE_FILE
-    await safe_edit(q, f"📨 <b>Файли для #{esc(parts[2])}</b>\n\nНадішліть файли для клієнта {parts[1]}.")
-
-
-@admin_only
-async def adm_push_pages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    parts = q.data.split(":")
-    if len(parts) < 3: return
-    client_uid, oid = parts[1], parts[2]
-
-    if not PAGES_GH_TOKEN or not os.getenv("GH_TOKEN_2"):
-        await safe_edit(q,
-            "❌ <b>Токени GitHub не встановлено!</b>\n\n"
-            "Потрібні: <code>PAGES_GH_TOKEN</code> і <code>GH_TOKEN_2</code>.",
-            mkb(back_btn("admin_panel")))
+            val = int(text)
+            if not (1 <= val <= 100):
+                raise ValueError
+            context.user_data["new_promo_discount"] = val
+            context.user_data["state"] = AWAIT_PROMO_USES
+            await update.message.reply_text(
+                f"✅ Знижка: <b>{val}%</b>\n\n"
+                f"Введіть максимальну кількість використань (введіть <b>0</b> для необмеженої кількості):",
+                parse_mode="HTML"
+            )
+        except ValueError:
+            await update.message.reply_text("❌ Будь ласка, введіть ціле число від 1 до 100.")
         return
 
-    orders = await async_load(ORDERS_KEY, {})
-    order  = orders.get(oid, {})
-    await safe_edit(q,
-        f"🚀 <b>Підтвердіть деплой</b>\n\n"
-        f"📦 <code>{esc(oid)}</code>\n👤 <code>{client_uid}</code>\n📝 {esc(order.get('fio','?'))}\n\n"
-        "Буде виконано:\n1️⃣ Оновлення index.html\n2️⃣ Пуш папки → URL\n"
-        "3️⃣ Генерація QR\n4️⃣ Пуш фінального ресурсу",
-        mkb([InlineKeyboardButton("✅ Деплоїти", callback_data=f"adm_push_go:{client_uid}:{oid}")],
-            [InlineKeyboardButton("❌ Скасувати", callback_data="admin_panel")]))
-
-
-@admin_only
-async def adm_push_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    parts = q.data.split(":")
-    if len(parts) < 3: return
-    client_uid, oid = parts[1], parts[2]
-    await safe_edit(q, "⏳ <b>Деплоємо ланцюжком...</b>\nЦе може зайняти 30–60 секунд.")
-
-    orders = await async_load(ORDERS_KEY, {})
-    order  = orders.get(oid)
-    if not order:
-        await safe_edit(q, "❌ Замовлення не знайдено.")
-        return
-
-    try:
-        folder1_url = await _run_chain_deploy(oid, order)
-
-        orders = await async_load(ORDERS_KEY, {})
-        tariffs = await load_tariffs()
-        sub_end = calc_subscription_end(orders[oid].get("tariff", ""), tariffs)
-        orders[oid].update({
-            "pages_url": folder1_url, "status": "deployed",
-            "deployed_at": now_str(), "subscription_end": sub_end,
-            "notified_days": [],
-        })
-        await async_save(ORDERS_KEY, orders)
-        log_action("pages_deployed", q.from_user.id, {"oid": oid, "url": folder1_url})
-
-        sub_line = f"\n📅 Підписка до: <b>{datetime.fromisoformat(sub_end).strftime('%d.%m.%Y')}</b>" if sub_end else "\n♾ Підписка: безстрокова"
+    if state == AWAIT_PROMO_USES:
         try:
-            await context.bot.send_message(client_uid,
-                f"✅ <b>Кабінет готовий!</b>\n\n🔗 {folder1_url}{sub_line}\n\n"
-                f"⏱ Якщо не відкривається — зачекайте 1-2 хвилини.\n📋 <code>{esc(oid)}</code>",
-                parse_mode="HTML")
-        except Exception as e:
-            logger.error("Client notify error: %s", e)
-
-        await notify_group(context.bot,
-            f"🚀 <b>Деплой завершено</b>\n"
-            f"📦 <code>{esc(oid)}</code> | 👤 <code>{client_uid}</code>\n"
-            f"📝 {esc(order.get('fio',''))}\n🔗 {folder1_url}",
-            mkb([InlineKeyboardButton("🔗 Надіслати ще раз", callback_data=f"adm_send_link:{client_uid}:{oid}")]))
-
-        await safe_edit(q,
-            f"✅ <b>Деплой успішний!</b>\n📦 <code>{esc(oid)}</code>\n🔗 <code>{esc(folder1_url)}</code>\n\n"
-            f"✅ Посилання надіслано клієнту.",
-            mkb([InlineKeyboardButton("🔗 Надіслати ще раз", callback_data=f"adm_send_link:{client_uid}:{oid}")],
-                back_btn("admin_panel")))
-
-    except Exception as e:
-        logger.error("adm_push_go error: %s", e, exc_info=True)
-        await safe_edit(q,
-            f"❌ <b>Помилка деплою</b>\n\n<code>{esc(str(e)[:500])}</code>",
-            mkb(back_btn("admin_panel")))
-
-
-@admin_only
-async def adm_chain_deploy_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    has_gh = bool(PAGES_GH_TOKEN) and bool(os.getenv("GH_TOKEN_2"))
-    status = "✅ Готовий" if has_gh else "❌ Потрібні PAGES_GH_TOKEN і GH_TOKEN_2"
-    await safe_edit(q,
-        f"🚀 <b>Деплой ланцюжком</b>\n\n{status}\n\n"
-        "Ця дія оновлює весь ланцюжок сайтів та активує сторінки.",
-        mkb([InlineKeyboardButton("🚀 Запустити", callback_data="chain_deploy_run")] if has_gh else [],
-            back_btn("admin_panel")))
-
-
-@admin_only
-async def adm_chain_deploy_run(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await safe_edit(q, "⏳ <b>Запускаємо ланцюжок деплою...</b>")
-    try:
-        result = await asyncio.to_thread(chain_deploy.run_full_chain)
-        folder2_url = result["folder2_url"]
-        folder1_url = result["folder1_url"]
-        log_action("chain_deploy", q.from_user.id, result)
-        await safe_edit(q,
-            f"🚀 <b>Ланцюжок деплою завершено!</b>\n\n"
-            f"📁 Папка 2:\n🔗 {esc(folder2_url)}\n\n"
-            f"📁 Папка 1 (з QR):\n🔗 <b>{esc(folder1_url)}</b>\n\n"
-            f"⏱ Зачекайте 1-2 хвилини, якщо сайти ще не відкрилися.",
-            mkb(back_btn("admin_panel")))
-    except chain_deploy.DeployError as e:
-        await safe_edit(q, f"❌ <b>Помилка деплою</b>\n\n<code>{esc(str(e))}</code>",
-                        mkb(back_btn("admin_panel")))
-    except Exception as e:
-        logger.error("chain_deploy_run error: %s", e, exc_info=True)
-        await safe_edit(q, f"❌ <b>Непередбачена помилка</b>\n\n<code>{esc(str(e)[:500])}</code>",
-                        mkb(back_btn("admin_panel")))
-
-
-@admin_only
-async def adm_send_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    parts = q.data.split(":")
-    if len(parts) < 3: return
-    client_uid, oid = parts[1], parts[2]
-    orders = await async_load(ORDERS_KEY, {})
-    order  = orders.get(oid, {})
-    url    = order.get("pages_url", "")
-    if not url:
-        await q.answer("❌ URL не знайдено — спочатку зробіть деплой", show_alert=True)
+            uses = int(text)
+            if uses < 0:
+                raise ValueError
+            
+            code = context.user_data["new_promo_code"]
+            discount = context.user_data["new_promo_discount"]
+            
+            promos = await load_promos()
+            promos[code] = {
+                "discount": discount,
+                "max_uses": uses,
+                "uses": 0,
+                "active": True,
+                "used_by": [],
+                "created_at": now_str(),
+                "created_by": uid
+            }
+            await save_promos(promos)
+            context.user_data["state"] = None
+            log_action("promo_created", uid, {"code": code, "discount": discount, "max_uses": uses})
+            
+            uses_str = "необмежено (∞)" if uses == 0 else f"{uses} разів"
+            await update.message.reply_text(
+                f"🎉 <b>Промо-код успішно створено!</b>\n\n"
+                f"🎟️ Код: <code>{esc(code)}</code>\n"
+                f"💰 Знижка: <b>{discount}%</b>\n"
+                f"👥 Лиміт використань: <b>{uses_str}</b>",
+                parse_mode="HTML"
+            )
+        except ValueError:
+            await update.message.reply_text("❌ Введіть ціле невід'ємне число (0 або більше).")
         return
+
+    # 5. Пошук користувача
+    if state == AWAIT_USER_SEARCH:
+        context.user_data["state"] = None
+        users = await async_load(USERS_KEY, {})
+        q_raw = text.strip().lstrip("@").lower()
+        
+        found = []
+        for uid2, u in users.items():
+            uname = (u.get("username") or "").lower()
+            fname = (u.get("first_name") or "").lower()
+            doc_fio = (u.get("doc_fio") or "").lower()
+            
+            if q_raw in uname or q_raw in str(uid2) or q_raw in fname or q_raw in doc_fio:
+                found.append((uid2, u))
+
+        if not found:
+            await update.message.reply_text("🔍 Користувача за вашим запитом не знайдено.")
+            return
+
+        if len(found) == 1:
+            await _send_user_card(update, context, found[0][0], found[0][1])
+        else:
+            text_list = f"🔍 <b>Знайдено {len(found)} користувачів:</b>\n\n"
+            kb_rows = []
+            for uid2, u in found[:10]:
+                text_list += f"• <b>{esc(u.get('first_name','?'))}</b> (@{esc(u.get('username','—'))}) — ID: <code>{uid2}</code>\n"
+                kb_rows.append([InlineKeyboardButton(f"👤 {u.get('first_name','?')} ({uid2})", callback_data=f"adm_user_card:{uid2}")])
+            
+            kb_rows.append([InlineKeyboardButton("🔙 В адмін-панель", callback_data="admin_panel")])
+            await update.message.reply_text(text_list, reply_markup=InlineKeyboardMarkup(kb_rows), parse_mode="HTML")
+        return
+
+    # 6. Зміна балансу
+    if state == AWAIT_BALANCE_UID:
+        target_uid = text.strip()
+        users = await async_load(USERS_KEY, {})
+        if target_uid not in users:
+            await update.message.reply_text("❌ Користувача з таким ID не знайдено в базі.")
+            return
+        
+        context.user_data["balance_target_uid"] = target_uid
+        context.user_data["state"] = AWAIT_BALANCE_AMOUNT
+        curr_bal = users[target_uid].get("balance", 0)
+        await update.message.reply_text(
+            f"👤 Користувач: <code>{target_uid}</code>\n"
+            f"💰 Поточний баланс: <b>{curr_bal}₴</b>\n\n"
+            f"Введіть суму для зміни (наприклад <b>100</b> для нарахування або <b>-50</b> для списання):",
+            parse_mode="HTML"
+        )
+        return
+
+    if state == AWAIT_BALANCE_AMOUNT:
+        try:
+            amount = int(text)
+            target_uid = context.user_data.get("balance_target_uid")
+            users = await async_load(USERS_KEY, {})
+            
+            if target_uid not in users:
+                await update.message.reply_text("❌ Помилка: Сесія втрачена.")
+            else:
+                old_bal = users[target_uid].get("balance", 0)
+                new_bal = max(0, old_bal + amount)
+                users[target_uid]["balance"] = new_bal
+                await async_save(USERS_KEY, users)
+                
+                context.user_data["state"] = None
+                log_action("balance_change", uid, {"target": target_uid, "delta": amount, "new_balance": new_bal})
+                
+                # Повідомляємо користувача
+                try:
+                    sign = "+" if amount > 0 else ""
+                    await context.bot.send_message(
+                        target_uid,
+                        f"💳 <b>Зміна балансу!</b>\n\nОперація: <b>{sign}{amount}₴</b>\nВаш новий баланс: <b>{new_bal}₴</b>",
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+
+                await update.message.reply_text(
+                    f"✅ <b>Баланс оновлено!</b>\n\n"
+                    f"🆔 Користувач: <code>{target_uid}</code>\n"
+                    f"📊 Було: {old_bal}₴  ➜  <b>Стало: {new_bal}₴</b>",
+                    parse_mode="HTML"
+                )
+        except ValueError:
+            await update.message.reply_text("❌ Введіть коректне ціле число.")
+        return
+
+    # 7. Налаштування реквізитів
+    if state == AWAIT_CUSTOM_PAYMENT_TEXT:
+        parts = [p.strip() for p in text.split("\n") if p.strip()]
+        if len(parts) >= 2:
+            s = await load_settings()
+            s["payment_card"] = parts[0]
+            s["payment_holder"] = parts[1]
+            if len(parts) >= 3:
+                s["payment_link"] = parts[2]
+            await save_settings(s)
+            
+            context.user_data["state"] = None
+            log_action("update_payment_details", uid)
+            await update.message.reply_text(
+                f"✅ <b>Реквізити збережено!</b>\n\n"
+                f"💳 Картка: <code>{esc(parts[0])}</code>\n"
+                f"👤 Отримувач: <b>{esc(parts[1])}</b>\n"
+                f"🔗 Посилання: {esc(parts[2] if len(parts)>=3 else '—')}",
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text("❌ Потрібно ввести мінімум 2 рядки:\n1-й рядок: Номер картки\n2-й рядок: ПІБ/Назва банку отримувача")
+        return
+
+    # 8. Відхилення замовлення з причиною
+    if state == AWAIT_REJECT_REASON:
+        oid = context.user_data.get("reject_oid")
+        client_uid = context.user_data.get("reject_uid")
+        
+        if oid and client_uid:
+            orders = await async_load(ORDERS_KEY, {})
+            if oid in orders:
+                orders[oid]["status"] = "rejected"
+                orders[oid]["reject_reason"] = text
+                orders[oid]["rejected_at"] = now_str()
+                orders[oid]["rejected_by"] = uid
+                await async_save(ORDERS_KEY, orders)
+
+            try:
+                await context.bot.send_message(
+                    client_uid,
+                    f"❌ <b>Ваше замовлення #{esc(oid)} відхилено</b>\n\n"
+                    f"💬 <b>Причина:</b> {esc(text)}\n\n"
+                    f"<i>Якщо ви вважаєте це помилкою, зв'яжіться з підтримкою через розділ 💬 Підтримка.</i>",
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.error("Error notifying user of reject: %s", e)
+
+            context.user_data["state"] = None
+            log_action("order_rejected", uid, {"oid": oid, "reason": text})
+            await update.message.reply_text(f"✅ Замовлення <code>#{oid}</code> відхилено, клієнта сповіщено.", parse_mode="HTML")
+        return
+
+    # 9. Редагування тарифу
+    if state in (AWAIT_TARIFF_EDIT_PRICE, AWAIT_TARIFF_EDIT_NAME, AWAIT_TARIFF_EDIT_EMOJI):
+        key = context.user_data.get("edit_tariff_key")
+        tariffs = await load_tariffs()
+        if key in tariffs:
+            if state == AWAIT_TARIFF_EDIT_PRICE:
+                try:
+                    new_p = int(text)
+                    tariffs[key]["price"] = new_p
+                    await save_tariffs(tariffs)
+                    context.user_data["state"] = None
+                    await update.message.reply_text(f"✅ Ціну тарифу <b>{esc(tariffs[key]['name'])}</b> змінено на <b>{new_p}₴</b>", parse_mode="HTML")
+                except ValueError:
+                    await update.message.reply_text("❌ Введіть коректну ціну числом.")
+            elif state == AWAIT_TARIFF_EDIT_NAME:
+                tariffs[key]["name"] = text.strip()
+                await save_tariffs(tariffs)
+                context.user_data["state"] = None
+                await update.message.reply_text(f"✅ Назву тарифу оновлено на <b>{esc(text)}</b>", parse_mode="HTML")
+            elif state == AWAIT_TARIFF_EDIT_EMOJI:
+                tariffs[key]["emoji"] = text.strip()
+                await save_tariffs(tariffs)
+                context.user_data["state"] = None
+                await update.message.reply_text(f"✅ Емоджі тарифу змінено на {text.strip()}")
+        return
+
+    # 10. Створення нового тарифу
+    if state == AWAIT_TARIFF_NAME:
+        context.user_data["new_t_name"] = text.strip()
+        context.user_data["state"] = AWAIT_TARIFF_PRICE
+        await update.message.reply_text("💰 Введіть ціну тарифу в гривнях (числом):")
+        return
+
+    if state == AWAIT_TARIFF_PRICE:
+        try:
+            val = int(text)
+            context.user_data["new_t_price"] = val
+            context.user_data["state"] = AWAIT_TARIFF_DAYS
+            await update.message.reply_text("📅 Введіть кількість днів дії підписки (введіть <b>0</b> для безстрокового тарифу):", parse_mode="HTML")
+        except ValueError:
+            await update.message.reply_text("❌ Введіть ціле число.")
+        return
+
+    if state == AWAIT_TARIFF_DAYS:
+        try:
+            days_val = int(text)
+            context.user_data["new_t_days"] = days_val if days_val > 0 else None
+            context.user_data["state"] = AWAIT_TARIFF_EMOJI
+            await update.message.reply_text("😊 Надішліть емоджі для тарифу (наприклад: 🌟, 💎, 📅):")
+        except ValueError:
+            await update.message.reply_text("❌ Введіть ціле число.")
+        return
+
+    if state == AWAIT_TARIFF_EMOJI:
+        name = context.user_data["new_t_name"]
+        price = context.user_data["new_t_price"]
+        days = context.user_data.get("new_t_days")
+        emj = text.strip() or "📦"
+        
+        # Генерація унікального ключа
+        key = re.sub(r"[^a-z0-9]", "_", name.lower())[:20]
+        tariffs = await load_tariffs()
+        base, c = key, 1
+        while key in tariffs:
+            key = f"{base}_{c}"
+            c += 1
+
+        tariffs[key] = {
+            "name": name,
+            "price": price,
+            "days": days,
+            "emoji": emj,
+            "active": True
+        }
+        await save_tariffs(tariffs)
+        context.user_data["state"] = None
+        log_action("tariff_created", uid, {"key": key, "name": name, "price": price})
+        
+        days_str = "безстроково (∞)" if not days else f"{days} днів"
+        await update.message.reply_text(
+            f"🎉 <b>Тариф успішно створено!</b>\n\n"
+            f"{emj} <b>{esc(name)}</b> — <b>{price}₴</b> ({days_str})",
+            parse_mode="HTML"
+        )
+        return
+
+
+async def _process_complete_order_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка відправки готових файлів/документів від адміна клієнту."""
+    oid = context.user_data.get("complete_oid")
+    client_uid = context.user_data.get("complete_uid")
+    
+    if not oid or not client_uid:
+        await update.message.reply_text("❌ Помилка: Контекст замовлення втрачено.")
+        context.user_data["state"] = None
+        return
+
+    caption = f"📁 <b>Ваше замовлення #{esc(oid)} виконано!</b>\n\nДякуємо, що обираєте наш сервіс 🌸"
+
     try:
-        await context.bot.send_message(client_uid,
-            f"✅ <b>Кабінет готовий!</b>\n\n🔗 {url}\n\n📋 <code>{esc(oid)}</code>",
-            parse_mode="HTML")
-        await notify_group(context.bot,
-            f"📤 Посилання надіслано\n👤 <code>{client_uid}</code> | 📦 <code>{esc(oid)}</code>\n🔗 {url}")
-        await safe_edit(q, f"✅ Посилання надіслано → {client_uid}\n🔗 {esc(url)}",
-                        mkb(back_btn("admin_panel")))
+        if update.message.document:
+            await context.bot.send_document(chat_id=client_uid, document=update.message.document.file_id, caption=caption, parse_mode="HTML")
+        elif update.message.photo:
+            await context.bot.send_photo(chat_id=client_uid, photo=update.message.photo[-1].file_id, caption=caption, parse_mode="HTML")
+        elif update.message.video:
+            await context.bot.send_video(chat_id=client_uid, video=update.message.video.file_id, caption=caption, parse_mode="HTML")
+        elif update.message.audio:
+            await context.bot.send_audio(chat_id=client_uid, audio=update.message.audio.file_id, caption=caption, parse_mode="HTML")
+        else:
+            await update.message.reply_text("⚠️ Непідтримуваний тип файлу. Надішліть документ, фото або відео.")
+            return
+
+        # Оновлюємо статус у БД
+        orders = await async_load(ORDERS_KEY, {})
+        if oid in orders:
+            orders[oid]["status"] = "completed"
+            orders[oid]["completed_at"] = now_str()
+            orders[oid]["completed_by"] = update.effective_user.id
+            await async_save(ORDERS_KEY, orders)
+
+            # Нараховуємо загальну суму витрат користувачу
+            users = await async_load(USERS_KEY, {})
+            if client_uid in users:
+                spent = orders[oid].get("final_price", 0)
+                users[client_uid]["total_spent"] = users[client_uid].get("total_spent", 0) + spent
+                await async_save(USERS_KEY, users)
+
+        log_action("order_completed_files", update.effective_user.id, {"oid": oid, "client_uid": client_uid})
+        await update.message.reply_text(f"✅ Файли успішно відправлені клієнту <code>{client_uid}</code>. Замовлення <code>#{oid}</code> закрито!", parse_mode="HTML")
+        context.user_data["state"] = None
+
+    except Forbidden:
+        await update.message.reply_text(f"❌ Клієнт <code>{client_uid}</code> заблокував бота.", parse_mode="HTML")
     except Exception as e:
-        await q.answer(f"Помилка: {e}", show_alert=True)
+        logger.error("Error sending complete order files: %s", e)
+        await update.message.reply_text(f"❌ Помилка при відправці файлів: {esc(str(e))}")
 
 
-# ── Admin User Management Handlers ─────────────────────────────────────────────
+# ── Admin User Management Handlers (Extended) ──────────────────────────────────
+
+USERS_PER_PAGE = 10
 
 @admin_only
 async def adm_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Список користувачів з підтримкою пагінації."""
     q = update.callback_query
+    page = 1
+    if q and q.data and ":" in q.data:
+        try:
+            page = int(q.data.split(":")[1])
+        except ValueError:
+            page = 1
+
     users = await async_load(USERS_KEY, {})
-    sorted_u = sorted(users.items(), key=lambda x: x[1].get("joined_date",""), reverse=True)[:15]
-    text = f"👥 <b>Користувачі ({len(users)})</b>\n\n"
-    for uid2, u in sorted_u:
-        badges = ("👑" if u.get("vip") else "") + ("🚫" if u.get("banned") else "") + ("💰" if u.get("has_bought") else "🆕")
-        text += f"{badges} <b>{esc(u.get('first_name','?'))}</b> (@{esc(u.get('username','?'))})\n"
-        text += f"    🆔 {uid2} | 💳 {u.get('balance',0)}₴ | 👥 {u.get('ref_count',0)}\n\n"
-    await safe_edit(q, text, mkb(
-        [InlineKeyboardButton("🔍 Пошук", callback_data="adm:search"),
-         InlineKeyboardButton("💰 Баланс", callback_data="adm:balance")],
-        back_btn("admin_panel"),
-    ))
+    sorted_u = sorted(users.items(), key=lambda x: x[1].get("joined_date", ""), reverse=True)
+    
+    total_users = len(sorted_u)
+    total_pages = max(1, (total_users + USERS_PER_PAGE - 1) // USERS_PER_PAGE)
+    page = max(1, min(page, total_pages))
+
+    start_idx = (page - 1) * USERS_PER_PAGE
+    end_idx = start_idx + USERS_PER_PAGE
+    page_users = sorted_u[start_idx:end_idx]
+
+    text = f"👥 <b>УПРАВЛІННЯ КОРИСТУВАЧАМИ</b> (Стор. {page}/{total_pages})\n"
+    text += f"────────────────────────────\n"
+    text += f"📊 Всього у базі: <b>{total_users}</b>\n\n"
+
+    for uid2, u in page_users:
+        badges = ("👑 " if u.get("vip") else "") + ("🚫 " if u.get("banned") else "") + ("💰 " if u.get("has_bought") else "🆕 ")
+        fname = esc(u.get('first_name', 'Користувач'))
+        uname = f"@{esc(u.get('username'))}" if u.get('username') else "без username"
+        
+        text += f"{badges}<b>{fname}</b> ({uname})\n"
+        text += f"└ 🆔 <code>{uid2}</code> | 💳 {u.get('balance', 0)}₴ | 👥 {u.get('ref_count', 0)}\n\n"
+
+    kb_rows = []
+    
+    # Кнопки пагінації
+    nav_btns = []
+    if page > 1:
+        nav_btns.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"adm:users:{page - 1}"))
+    nav_btns.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop"))
+    if page < total_pages:
+        nav_btns.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"adm:users:{page + 1}"))
+    kb_rows.append(nav_btns)
+
+    kb_rows.append([
+        InlineKeyboardButton("🔍 Пошук", callback_data="adm:search"),
+        InlineKeyboardButton("💰 Змінити баланс", callback_data="adm:balance")
+    ])
+    kb_rows.append(back_btn("admin_panel"))
+
+    await safe_edit(q, text, InlineKeyboardMarkup(kb_rows))
 
 
 @admin_only
 async def adm_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["state"] = AWAIT_USER_SEARCH
-    await safe_edit(update.callback_query, "🔍 Введіть @username, ID або ім'я:", mkb(back_btn("admin_panel")))
+    await safe_edit(
+        update.callback_query,
+        "🔍 <b>ПОШУК КОРИСТУВАЧА</b>\n────────────────────────────\n"
+        "Введіть @username, Telegram ID або ПІБ для пошуку:",
+        mkb(back_btn("admin_panel"))
+    )
 
 
 @admin_only
 async def adm_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["state"] = AWAIT_BALANCE_UID
-    await safe_edit(update.callback_query, "💰 Введіть ID користувача:", mkb(back_btn("admin_panel")))
+    await safe_edit(
+        update.callback_query,
+        "💰 <b>ЗМІНА БАЛАНСУ</b>\n────────────────────────────\n"
+        "Введіть Telegram ID користувача:",
+        mkb(back_btn("admin_panel"))
+    )
 
 
-async def _send_user_card(update, context, uid2: str, u: dict):
+async def _send_user_card(update: Update, context: ContextTypes.DEFAULT_TYPE, uid2: str, u: dict):
+    """Детальна картка користувача з повним функціоналом керування."""
     orders = await async_load(ORDERS_KEY, {})
-    count  = sum(1 for o in orders.values() if o.get("user_id") == uid2)
+    user_orders = [o for o in orders.values() if o.get("user_id") == uid2]
+    
+    completed_orders = sum(1 for o in user_orders if o.get("status") in ("completed", "deployed"))
+    total_spent = u.get("total_spent") or sum(o.get("final_price", 0) for o in user_orders if o.get("status") in ("completed", "deployed"))
+
+    joined = u.get("joined_date", "невідомо")[:10] if u.get("joined_date") else "невідомо"
+    username_str = f"@{esc(u.get('username'))}" if u.get('username') else "не вказано"
+
     text = (
-        f"👤 <b>{esc(u.get('first_name','?'))}</b>\n🆔 <code>{uid2}</code>\n"
-        f"📱 @{esc(u.get('username','?'))}\n💰 {u.get('balance',0)}₴  |  📦 {count} замовлень\n"
-        f"👥 Рефералів: {u.get('ref_count',0)}  |  VIP: {'👑' if u.get('vip') else '—'}  |  Бан: {'🚫' if u.get('banned') else '—'}"
+        f"👤 <b>КАРТКА КОРИСТУВАЧА</b>\n"
+        f"────────────────────────────\n"
+        f"Ім'я: <b>{esc(u.get('first_name', '?'))}</b>\n"
+        f"🆔 ID: <code>{uid2}</code>\n"
+        f"📱 Юзернейм: {username_str}\n"
+        f"📅 Реєстрація: <code>{joined}</code>\n\n"
+        f"📊 <b>СТАТИСТИКА ТА БАЛАНС:</b>\n"
+        f"💰 Баланс: <b>{u.get('balance', 0)}₴</b>\n"
+        f"💳 Всього витрачено: <b>{total_spent}₴</b>\n"
+        f"📦 Всього замовлень: <b>{len(user_orders)}</b> (активних/виконаних: {completed_orders})\n"
+        f"👥 Запрошено рефералів: <b>{u.get('ref_count', 0)}</b>\n\n"
+        f"⚙️ <b>СТАТУСИ:</b>\n"
+        f"👑 VIP: {'✅ Так' if u.get('vip') else '❌ Ні'}\n"
+        f"🚫 Блокування: {'🔴 Заблокований' if u.get('banned') else '🟢 Активний'}"
     )
+
+    ban_btn_label = "🔓 Розблокувати" if u.get("banned") else "🚫 Заблокувати"
+    vip_btn_label = "👤 Зняти VIP" if u.get("vip") else "👑 Надати VIP"
+
     kb = mkb(
-        [InlineKeyboardButton("🔓" if u.get("banned") else "🚫", callback_data=f"adm_ban:{uid2}"),
-         InlineKeyboardButton("👤" if u.get("vip") else "👑",    callback_data=f"adm_vip:{uid2}")],
-        [InlineKeyboardButton("💰 Баланс", callback_data="adm:balance"),
+        [InlineKeyboardButton(ban_btn_label, callback_data=f"adm_ban:{uid2}"),
+         InlineKeyboardButton(vip_btn_label, callback_data=f"adm_vip:{uid2}")],
+        [InlineKeyboardButton("💰 Поповнити / Списати", callback_data=f"adm_direct_balance:{uid2}"),
          InlineKeyboardButton("💬 Написати", callback_data=f"adm_msg:{uid2}")],
-        back_btn("adm:users"),
+        [InlineKeyboardButton("📜 Замовлення клієнта", callback_data=f"adm_user_orders:{uid2}")],
+        back_btn("adm:users")
     )
+
     if update.callback_query:
         await safe_edit(update.callback_query, text, kb)
     else:
         await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+
+
+@admin_only
+async def adm_direct_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Прямий перехід до зміни балансу з картки користувача."""
+    q = update.callback_query
+    parts = q.data.split(":")
+    if len(parts) < 2: return
+    uid2 = parts[1]
+
+    context.user_data["balance_target_uid"] = uid2
+    context.user_data["state"] = AWAIT_BALANCE_AMOUNT
+
+    users = await async_load(USERS_KEY, {})
+    curr_bal = users.get(uid2, {}).get("balance", 0)
+
+    await safe_edit(
+        q,
+        f"💰 <b>ЗМІНА БАЛАНСУ</b> для <code>{uid2}</code>\n"
+        f"Поточний баланс: <b>{curr_bal}₴</b>\n\n"
+        f"Введіть суму змін (наприклад <b>100</b> або <b>-50</b>):",
+        mkb(back_btn(f"adm_user_card:{uid2}"))
+    )
 
 
 @admin_only
@@ -2514,12 +3020,17 @@ async def adm_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = q.data.split(":")
     if len(parts) < 2: return
     uid2 = parts[1]
+    
     users = await async_load(USERS_KEY, {})
     if uid2 in users:
         users[uid2]["banned"] = not users[uid2].get("banned", False)
         await async_save(USERS_KEY, users)
-        action = "заблоковано" if users[uid2]["banned"] else "розблоковано"
-        await q.answer(f"Користувача {action}!", show_alert=True)
+        
+        is_banned = users[uid2]["banned"]
+        action_text = "заблоковано" if is_banned else "розблоковано"
+        log_action("admin_ban_toggle", q.from_user.id, {"target_uid": uid2, "banned": is_banned})
+        
+        await q.answer(f"Користувача успішно {action_text}!", show_alert=True)
         await _send_user_card(update, context, uid2, users[uid2])
 
 
@@ -2529,17 +3040,21 @@ async def adm_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = q.data.split(":")
     if len(parts) < 2: return
     uid2 = parts[1]
+    
     users = await async_load(USERS_KEY, {})
     if uid2 in users:
-        users[uid2]["vip"] = not users[uid2].get("vip", False)
+        is_vip = not users[uid2].get("vip", False)
+        users[uid2]["vip"] = is_vip
         await async_save(USERS_KEY, users)
+        
         try:
-            await context.bot.send_message(uid2,
-                f"👑 <b>{'VIP-статус надано!' if users[uid2]['vip'] else 'VIP знято.'}</b>",
-                parse_mode="HTML")
+            msg = "👑 <b>Вам надано VIP-статус!</b>\nДякуємо за співпрацю 🌸" if is_vip else "ℹ️ Ваш VIP-статус було деактивовано."
+            await context.bot.send_message(uid2, msg, parse_mode="HTML")
         except Exception:
             pass
-        await q.answer("VIP змінено!", show_alert=True)
+            
+        log_action("admin_vip_toggle", q.from_user.id, {"target_uid": uid2, "vip": is_vip})
+        await q.answer("VIP-статус змінено!", show_alert=True)
         await _send_user_card(update, context, uid2, users[uid2])
 
 
@@ -2549,51 +3064,97 @@ async def adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = q.data.split(":")
     if len(parts) < 2: return
     uid2 = parts[1]
-    context.user_data["state"]         = AWAIT_REPLY_TO_USER
+    
+    context.user_data["state"] = AWAIT_REPLY_TO_USER
     context.user_data["reply_to_uid"] = uid2
     context.user_data.pop("reply_fb_id", None)
-    await safe_edit(q, f"💬 Повідомлення клієнту {uid2}\n\nВведіть текст:", mkb(back_btn("admin_panel")))
+    
+    await safe_edit(
+        q,
+        f"💬 <b>НОВЕ ПОВІДОМЛЕННЯ ДЛЯ <code>{uid2}</code></b>\n────────────────────────────\n"
+        f"Введіть текст повідомлення, яке буде відправлено клієнту від імені бота:",
+        mkb(back_btn(f"adm_user_card:{uid2}"))
+    )
 
 
 @admin_only
 async def adm_confirm_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Підтвердження виводу реферальних коштів адміністратором."""
     q = update.callback_query
     parts = q.data.split(":")
     if len(parts) < 3: return
     uid2, amount = parts[1], int(parts[2])
+    
     users = await async_load(USERS_KEY, {})
     if uid2 in users:
         users[uid2]["balance"] = max(0, users[uid2].get("balance", 0) - amount)
         await async_save(USERS_KEY, users)
+        
         try:
-            await context.bot.send_message(uid2,
-                f"💰 <b>Вивід підтверджено!</b>\n{amount}₴ буде відправлено найближчим часом. 🌸",
-                parse_mode="HTML")
+            await context.bot.send_message(
+                uid2,
+                f"🎉 <b>Запит на вивід коштів оброблено!</b>\n\n"
+                f"💰 Сума <b>{amount}₴</b> успішно перерахована за вашими реквізитами. Дякуємо! 🌸",
+                parse_mode="HTML"
+            )
         except Exception:
             pass
+            
         log_action("withdraw_confirmed", q.from_user.id, {"uid": uid2, "amount": amount})
-    await safe_edit(q, f"✅ Вивід {amount}₴ для {uid2} підтверджено.")
+        await safe_edit(q, f"✅ Вивід <b>{amount}₴</b> для користувача <code>{uid2}</code> підтверджено.")
 
 
-# ── Admin Tariff Handlers ──────────────────────────────────────────────────────
+@admin_only
+async def adm_reject_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Відхилення виводу коштів із можливістю повернення/збереження балансу."""
+    q = update.callback_query
+    parts = q.data.split(":")
+    if len(parts) < 3: return
+    uid2, amount = parts[1], int(parts[2])
+
+    try:
+        await context.bot.send_message(
+            uid2,
+            f"❌ <b>Запит на вивід коштів ({amount}₴) відхилено.</b>\n\n"
+            f"Кошти залишено на вашому внутрішньому балансі. За деталями зверніться в підтримку.",
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+
+    log_action("withdraw_rejected", q.from_user.id, {"uid": uid2, "amount": amount})
+    await safe_edit(q, f"❌ Вивід {amount}₴ для користувача <code>{uid2}</code> відхилено.")
+
+
+# ── Admin Tariff Handlers (Extended) ───────────────────────────────────────────
 
 @admin_only
 async def adm_tariffs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     tariffs = await load_tariffs()
-    text = "💰 <b>Тарифи</b>\n\n"
+    
+    text = (
+        "💰 <b>УПРАВЛІННЯ ТАРИФАМИ ПІДПИСКИ</b>\n"
+        "────────────────────────────\n"
+        "Нижче наведено список усіх тарифів бота:\n\n"
+    )
+    
     kb_rows = []
     for k, t in tariffs.items():
         st = "✅" if t.get("active", True) else "❌"
-        d  = "∞" if not t.get("days") else f"{t['days']}д"
-        text += f"{st} {t.get('emoji','📦')} <b>{esc(t.get('name',''))}</b> — {t.get('price')}₴ ({d})\n"
+        d = "безстроково" if not t.get("days") else f"{t['days']}дн"
+        
+        text += f"{st} {t.get('emoji','📦')} <b>{esc(t.get('name',''))}</b> — <b>{t.get('price')}₴</b> <i>({d})</i>\n"
+        
         kb_rows.append([
             InlineKeyboardButton(f"{st} {t.get('name')}", callback_data=f"tariff_toggle:{k}"),
-            InlineKeyboardButton("✏️", callback_data=f"tariff_edit:{k}"),
-            InlineKeyboardButton("🗑️", callback_data=f"tariff_del:{k}"),
+            InlineKeyboardButton("✏️ Ред.", callback_data=f"tariff_edit:{k}"),
+            InlineKeyboardButton("🗑️ Видалити", callback_data=f"tariff_del_confirm:{k}"),
         ])
-    kb_rows.append([InlineKeyboardButton("➕ Додати", callback_data="tariff_add")])
+        
+    kb_rows.append([InlineKeyboardButton("➕ Додати новий тариф", callback_data="tariff_add")])
     kb_rows.append(back_btn("admin_panel"))
+    
     await safe_edit(q, text, InlineKeyboardMarkup(kb_rows))
 
 
@@ -2606,18 +3167,49 @@ async def tariff_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if key in tariffs:
             tariffs[key]["active"] = not tariffs[key].get("active", True)
             await save_tariffs(tariffs)
+            log_action("tariff_toggle", update.effective_user.id, {"key": key, "active": tariffs[key]["active"]})
     await adm_tariffs(update, context)
 
 
 @admin_only
-async def tariff_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    parts = update.callback_query.data.split(":")
+async def tariff_del_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Запит на підтвердження видалення тарифу."""
+    q = update.callback_query
+    parts = q.data.split(":")
+    if len(parts) < 2: return
+    key = parts[1]
+
+    tariffs = await load_tariffs()
+    t = tariffs.get(key)
+    if not t:
+        await q.answer("❌ Тариф не знайдено", show_alert=True)
+        return
+
+    text = (
+        f"⚠️ <b>ВИДАЛЕННЯ ТАРИФУ</b>\n────────────────────────────\n"
+        f"Ви дійсно бажаєте видалити тариф <b>{t.get('emoji','📦')} {esc(t.get('name'))}</b> ({t.get('price')}₴)?"
+    )
+    
+    kb = mkb(
+        [InlineKeyboardButton("🔥 Так, видалити", callback_data=f"tariff_del_do:{key}")],
+        [InlineKeyboardButton("❌ Скасувати", callback_data="adm:tariffs")]
+    )
+    await safe_edit(q, text, kb)
+
+
+@admin_only
+async def tariff_del_do(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Остаточне видалення тарифу."""
+    q = update.callback_query
+    parts = q.data.split(":")
     if len(parts) > 1:
         key = parts[1]
         tariffs = await load_tariffs()
         if key in tariffs:
             del tariffs[key]
             await save_tariffs(tariffs)
+            log_action("tariff_deleted", q.from_user.id, {"key": key})
+            await q.answer("Тариф видалено!", show_alert=True)
     await adm_tariffs(update, context)
 
 
@@ -2627,14 +3219,27 @@ async def tariff_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = q.data.split(":")
     if len(parts) < 2: return
     key = parts[1]
+    
     context.user_data["edit_tariff_key"] = key
     tariffs = await load_tariffs()
     t = tariffs.get(key, {})
-    await safe_edit(q, f"✏️ <b>{t.get('emoji','📦')} {esc(t.get('name',''))}</b> — {t.get('price')}₴\n\nЩо змінити?",
-        mkb([InlineKeyboardButton("📝 Назва", callback_data=f"tedit_name:{key}"),
-              InlineKeyboardButton("💰 Ціна",  callback_data=f"tedit_price:{key}")],
-            [InlineKeyboardButton("😊 Емоджі", callback_data=f"tedit_emoji:{key}")],
-            back_btn("adm:tariffs")))
+    
+    days_str = "безстроковий" if not t.get('days') else f"{t.get('days')} дн."
+    text = (
+        f"✏️ <b>РЕДАГУВАННЯ ТАРИФУ</b>\n────────────────────────────\n"
+        f"Тариф: {t.get('emoji','📦')} <b>{esc(t.get('name',''))}</b>\n"
+        f"Ціна: <b>{t.get('price')}₴</b>\n"
+        f"Термін: <b>{days_str}</b>\n\n"
+        f"Оберіть параметр для зміни:"
+    )
+    
+    kb = mkb(
+        [InlineKeyboardButton("📝 Змінити назву", callback_data=f"tedit_name:{key}"),
+         InlineKeyboardButton("💰 Змінити ціну", callback_data=f"tedit_price:{key}")],
+        [InlineKeyboardButton("😊 Змінити емоджі", callback_data=f"tedit_emoji:{key}")],
+        back_btn("adm:tariffs")
+    )
+    await safe_edit(q, text, kb)
 
 
 @admin_only
@@ -2643,7 +3248,7 @@ async def tedit_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(parts) > 1:
         context.user_data["edit_tariff_key"] = parts[1]
         context.user_data["state"] = AWAIT_TARIFF_EDIT_NAME
-        await safe_edit(update.callback_query, "📝 Введіть нову назву:")
+        await safe_edit(update.callback_query, "📝 Введіть нову назву тарифу:", mkb(back_btn("adm:tariffs")))
 
 
 @admin_only
@@ -2652,7 +3257,7 @@ async def tedit_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(parts) > 1:
         context.user_data["edit_tariff_key"] = parts[1]
         context.user_data["state"] = AWAIT_TARIFF_EDIT_PRICE
-        await safe_edit(update.callback_query, "💰 Введіть нову ціну (₴):")
+        await safe_edit(update.callback_query, "💰 Введіть нову ціну тарифу (в гривнях):", mkb(back_btn("adm:tariffs")))
 
 
 @admin_only
@@ -2661,31 +3266,52 @@ async def tedit_emoji(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(parts) > 1:
         context.user_data["edit_tariff_key"] = parts[1]
         context.user_data["state"] = AWAIT_TARIFF_EDIT_EMOJI
-        await safe_edit(update.callback_query, "😊 Введіть нове емоджі:")
+        await safe_edit(update.callback_query, "😊 Надішліть новий емоджі для тарифу:", mkb(back_btn("adm:tariffs")))
 
 
 @admin_only
 async def tariff_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["state"] = AWAIT_TARIFF_NAME
-    await safe_edit(update.callback_query, "➕ <b>Новий тариф</b>\n\nКрок 1/4: Назва:")
+    await safe_edit(
+        update.callback_query,
+        "➕ <b>СТВОРЕННЯ НОВОГО ТАРИФУ</b>\n────────────────────────────\n"
+        "Крок 1/4: Введіть назву тарифу (наприклад: <i>Преміум 30 днів</i>):",
+        mkb(back_btn("adm:tariffs"))
+    )
 
 
-# ── Admin Promo Handlers ───────────────────────────────────────────────────────
+# ── Admin Promo Handlers (Extended) ───────────────────────────────────────────
 
 @admin_only
 async def adm_promos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     promos = await load_promos()
-    text = f"🎟️ <b>Промо-коди ({len(promos)})</b>\n\n"
+    
+    text = (
+        f"🎟️ <b>УПРАВЛІННЯ ПРОМО-КОДАМИ ({len(promos)})</b>\n"
+        f"────────────────────────────\n"
+        f"Нижче наведено список усіх створених промо-кодів:\n\n"
+    )
+    
     kb_rows = []
-    for code, p in promos.items():
-        st = "✅" if p.get("active", True) else "❌"
-        text += f"{st} <code>{esc(code)}</code> — {p.get('discount',0)}% ({p.get('uses',0)}/{p.get('max_uses',0) or '∞'})\n"
-        kb_rows.append([InlineKeyboardButton(f"{st} {code}", callback_data=f"promo_toggle:{code}"),
-                         InlineKeyboardButton("🗑️", callback_data=f"promo_del:{code}")])
-    kb_rows.append([InlineKeyboardButton("➕ Створити", callback_data="adm_create_promo")])
+    if not promos:
+        text += "📭 <i>Активних або збережених промо-кодів не знайдено.</i>\n\n"
+    else:
+        for code, p in promos.items():
+            st = "🟢" if p.get("active", True) else "🔴"
+            max_u = p.get('max_uses', 0)
+            uses_str = "∞" if not max_u else str(max_u)
+            text += f"{st} <code>{esc(code)}</code> — <b>{p.get('discount',0)}%</b> <i>({p.get('uses',0)}/{uses_str} вик.)</i>\n"
+            
+            kb_rows.append([
+                InlineKeyboardButton(f"{st} {code}", callback_data=f"promo_toggle:{code}"),
+                InlineKeyboardButton("📊 Статистика", callback_data=f"promo_stat:{code}"),
+                InlineKeyboardButton("🗑️ Видалити", callback_data=f"promo_del_confirm:{code}")
+            ])
+
+    kb_rows.append([InlineKeyboardButton("➕ Створити новий промо-код", callback_data="adm_create_promo")])
     kb_rows.append(back_btn("admin_panel"))
-    await safe_edit(q, text or "📭 Немає промо-кодів.", InlineKeyboardMarkup(kb_rows))
+    await safe_edit(q, text, InlineKeyboardMarkup(kb_rows))
 
 
 @admin_only
@@ -2697,77 +3323,302 @@ async def promo_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if code in promos:
             promos[code]["active"] = not promos[code].get("active", True)
             await save_promos(promos)
+            log_action("promo_toggle", update.effective_user.id, {"code": code, "active": promos[code]["active"]})
     await adm_promos(update, context)
 
 
 @admin_only
-async def promo_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    parts = update.callback_query.data.split(":")
+async def promo_stat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Детальна статистика використання конкретного промокоду."""
+    q = update.callback_query
+    parts = q.data.split(":")
+    if len(parts) < 2: return
+    code = parts[1]
+
+    promos = await load_promos()
+    p = promos.get(code)
+    if not p:
+        await q.answer("❌ Промо-код не знайдено", show_alert=True)
+        return
+
+    used_by = p.get("used_by", [])
+    used_str = ", ".join([f"<code>{u}</code>" for u in used_by[:15]]) if used_by else "ніхто не використовував"
+
+    text = (
+        f"📊 <b>СТАТИСТИКА ПРОМО-КОДУ: <code>{esc(code)}</code></b>\n"
+        f"────────────────────────────\n"
+        f"💰 Знижка: <b>{p.get('discount', 0)}%</b>\n"
+        f"Статус: <b>{'🟢 Активний' if p.get('active') else '🔴 Деактивований'}</b>\n"
+        f"👥 Використано: <b>{p.get('uses', 0)} / {'∞' if not p.get('max_uses') else p.get('max_uses')}</b>\n"
+        f"📅 Створено: <code>{p.get('created_at', '—')[:16]}</code>\n\n"
+        f"👤 <b>Останні користувачі:</b>\n{used_str}"
+    )
+
+    kb = mkb(
+        [InlineKeyboardButton("🔄 Статус (On/Off)", callback_data=f"promo_toggle:{code}")],
+        [InlineKeyboardButton("🗑️ Видалити", callback_data=f"promo_del_confirm:{code}")],
+        back_btn("adm:promos")
+    )
+    await safe_edit(q, text, kb)
+
+
+@admin_only
+async def promo_del_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    parts = q.data.split(":")
+    if len(parts) < 2: return
+    code = parts[1]
+
+    text = f"⚠️ Ви дійсно бажаєте видалити промо-код <code>{esc(code)}</code>?"
+    kb = mkb(
+        [InlineKeyboardButton("🔥 Так, видалити", callback_data=f"promo_del_do:{code}")],
+        [InlineKeyboardButton("❌ Скасувати", callback_data="adm:promos")]
+    )
+    await safe_edit(q, text, kb)
+
+
+@admin_only
+async def promo_del_do(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    parts = q.data.split(":")
     if len(parts) > 1:
         code = parts[1]
         promos = await load_promos()
         if code in promos:
             del promos[code]
             await save_promos(promos)
+            log_action("promo_deleted", q.from_user.id, {"code": code})
+            await q.answer("Промо-код видалено!", show_alert=True)
     await adm_promos(update, context)
 
 
 @admin_only
 async def adm_create_promo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["state"] = AWAIT_PROMO_CODE
-    await safe_edit(update.callback_query, "🎟️ Введіть назву коду (наприклад: SALE20):",
-                    mkb(back_btn("adm:promos")))
+    await safe_edit(
+        update.callback_query,
+        "🎟️ <b>СТВОРЕННЯ ПРОМО-КОДУ</b>\n────────────────────────────\n"
+        "Введіть назву коду (наприклад: <code>SALE2026</code> або <code>SUMMER</code>):",
+        mkb(back_btn("adm:promos"))
+    )
 
 
-# ── Admin Broadcast Handlers ───────────────────────────────────────────────────
+# ── Admin Broadcast Handlers (With Ready Templates) ───────────────────────────
+
+BROADCAST_TEMPLATES = {
+    "tmpl_discount": {
+        "title": "🔥 Знижка на всі тарифи (-20%)",
+        "text": (
+            "🔥 <b>ГАРАЧА АКЦІЯ ТІЛЬКИ СЬОГОДНІ!</b>\n\n"
+            "Привіт, {first_name}! 👋\n\n"
+            "Отримайте знижку <b>-20%</b> на оновлення або продовження вашого інтерактивного кабінету!\n\n"
+            "🎟️ Скористайтесь промокодом: <code>SALE20</code>\n\n"
+            "Поспішайте, пропозиція діє обмежений час! ⏳"
+        )
+    },
+    "tmpl_update": {
+        "title": "🚀 Велике оновлення функціоналу",
+        "text": (
+            "🚀 <b>ВЕЛИКЕ ОНОВЛЕННЯ СЕРВІСУ!</b>\n\n"
+            "Вітаємо, {first_name}! Ми підготували для вас нові можливості:\n\n"
+            "✅ Додано миттєве оновлення фото у профілі\n"
+            "✅ Прискорено генерацію та деплой кабінетів у 2 рази\n"
+            "✅ Покращено стабільність та захист даних\n\n"
+            "Перевірте нові функції прямо зараз у розділі 👤 <b>Профіль</b>!"
+        )
+    },
+    "tmpl_maint": {
+        "title": "🛠 Попередження про тех. роботи",
+        "text": (
+            "🛠 <b>ТЕХНІЧНЕ ОБСЛУГОВУВАННЯ</b>\n\n"
+            "Шановний(а) {first_name}!\n\n"
+            "Сьогодні з <b>02:00 до 04:00</b> будуть проводитися планові технічні роботи на сервері.\n\n"
+            "У цей період деплой нових сайтів може бути тимчасово недоступним. Дякуємо за розуміння! 🌸"
+        )
+    },
+    "tmpl_referral": {
+        "title": "👥 Запрошуй друзів та заробляй",
+        "text": (
+            "💰 <b>ЗАРОБЛЯЙТЕ РАЗОМ З НАМИ!</b>\n\n"
+            "Привіт, {first_name}! Нагадуємо про нашу реферальну програму 🎉\n\n"
+            "Діліться вашим реферальним посиланням із друзями та отримуйте відсоток з кожного їхнього замовлення на свій баланс!\n\n"
+            "Заходьте в розділ <b>👥 Реферали</b> та забирайте своє посилання!"
+        )
+    }
+}
+
 
 @admin_only
 async def adm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
     users = await async_load(USERS_KEY, {})
     active = sum(1 for u in users.values() if not u.get("banned"))
+
+    text = (
+        f"📢 <b>РОЗСИЛКА ПОВІДОМЛЕНЬ</b>\n"
+        f"────────────────────────────\n"
+        f"👥 Активних отримувачів: <b>{active}</b> із {len(users)}\n\n"
+        f"Виберіть готовий шаблон розсилки або натисніть <b>'✍️ Написати свій текст'</b>:\n"
+    )
+
+    kb_rows = []
+    for t_id, t_info in BROADCAST_TEMPLATES.items():
+        kb_rows.append([InlineKeyboardButton(f"📄 {t_info['title']}", callback_data=f"cast_tmpl:{t_id}")])
+
+    kb_rows.append([InlineKeyboardButton("✍️ Написати власний текст", callback_data="cast_custom")])
+    kb_rows.append(back_btn("admin_panel"))
+
+    await safe_edit(q, text, InlineKeyboardMarkup(kb_rows))
+
+
+@admin_only
+async def cast_select_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка вибору готового шаблону розсилки."""
+    q = update.callback_query
+    parts = q.data.split(":")
+    if len(parts) < 2: return
+    tmpl_id = parts[1]
+
+    tmpl = BROADCAST_TEMPLATES.get(tmpl_id)
+    if not tmpl:
+        await q.answer("❌ Шаблон не знайдено", show_alert=True)
+        return
+
+    context.user_data["broadcast_text"] = tmpl["text"]
+    context.user_data["state"] = None
+
+    users = await async_load(USERS_KEY, {})
+    active_users = sum(1 for u in users.values() if not u.get("banned"))
+
+    # Показ попереднього перегляду із заповненими тегами
+    sample_text = tmpl["text"].format(first_name=q.from_user.first_name or "Користувач", user_id=q.from_user.id)
+
+    preview_text = (
+        f"📢 <b>ПОПЕРЕДНІЙ ПЕРЕГЛЯД РОЗСИЛКИ ({tmpl['title']}):</b>\n"
+        f"────────────────────────────\n"
+        f"{sample_text}\n"
+        f"────────────────────────────\n"
+        f"👥 Отримають користувачів: <b>{active_users}</b>\n"
+        f"💡 <i>Теги {{first_name}} та {{user_id}} будуть автоматично підставлені під кожного клієнта.</i>"
+    )
+
+    kb = mkb(
+        [InlineKeyboardButton("✅ Підтвердити та надіслати", callback_data="broadcast_go")],
+        [InlineKeyboardButton("✏️ Відредагувати текст", callback_data="cast_custom_edit")],
+        [InlineKeyboardButton("❌ Скасувати", callback_data="adm_broadcast")]
+    )
+    await safe_edit(q, preview_text, kb)
+
+
+@admin_only
+async def cast_custom(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["state"] = AWAIT_BROADCAST
-    await safe_edit(update.callback_query,
-        f"📢 <b>Розсилка</b>\nОтримають: <b>{active}</b> активних\n\nВведіть текст (HTML підтримується):",
-        mkb(back_btn("admin_panel")))
+    await safe_edit(
+        update.callback_query,
+        "✍️ <b>ВВЕДЕННЯ ТЕКСТУ РОЗСИЛКИ</b>\n────────────────────────────\n"
+        "Надішліть текст для розсилки (HTML-розмітка підтримується).\n\n"
+        "💡 Доступні теги для підстановки:\n"
+        "• <code>{first_name}</code> — ім'я користувача\n"
+        "• <code>{user_id}</code> — ID користувача",
+        mkb(back_btn("adm_broadcast"))
+    )
+
+
+@admin_only
+async def cast_custom_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Редагування обраного шаблону."""
+    q = update.callback_query
+    curr_text = context.user_data.get("broadcast_text", "")
+    context.user_data["state"] = AWAIT_BROADCAST
+
+    await safe_edit(
+        q,
+        f"✏️ <b>ПОТОЧНИЙ ТЕКСТ:</b>\n<code>{esc(curr_text)}</code>\n\n"
+        f"Надішліть новий відредагований варіант повідомлення:",
+        mkb(back_btn("adm_broadcast"))
+    )
 
 
 @admin_only
 async def broadcast_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    text  = context.user_data.pop("broadcast_text", "")
+    raw_text = context.user_data.pop("broadcast_text", "")
+
+    if not raw_text:
+        await q.answer("❌ Текст розсилки порожній!", show_alert=True)
+        return
+
     users = await async_load(USERS_KEY, {})
     success = failed = blocked = 0
-    await safe_edit(q, "📢 <b>Розсилка...</b>")
-    for uid2, u in users.items():
+    total = len(users)
+
+    await safe_edit(q, "📢 <b>Запуск розсилки...</b>\n⏳ Будь ласка, зачекайте. Це може зайняти певний час.")
+
+    for idx, (uid2, u) in enumerate(users.items(), 1):
         if u.get("banned"):
-            blocked += 1; continue
+            blocked += 1
+            continue
+
+        fname = u.get("first_name", "Клієнт")
+        # Форматування під конкретного користувача
+        formatted_text = raw_text.format(first_name=esc(fname), user_id=uid2)
+
         try:
-            await context.bot.send_message(uid2, text, parse_mode="HTML")
+            await context.bot.send_message(chat_id=uid2, text=formatted_text, parse_mode="HTML")
             success += 1
-            if success % 25 == 0:
-                await asyncio.sleep(1)
-        except (Forbidden, Exception):
+        except Forbidden:
+            blocked += 1
+        except Exception as e:
+            logger.warning("Broadcast failed for %s: %s", uid2, e)
             failed += 1
-    log_action("broadcast", q.from_user.id, {"success": success, "failed": failed})
-    await context.bot.send_message(q.from_user.id,
-        f"📢 <b>Розсилка завершена!</b>\n✅ {success}  ❌ {failed}  🔇 {blocked}", parse_mode="HTML")
+
+        # Захист від Rate Limit Telegram (30 повідомлень на секунду max)
+        if idx % 20 == 0:
+            await asyncio.sleep(1.0)
+
+    log_action("broadcast", q.from_user.id, {"success": success, "failed": failed, "blocked": blocked})
+
+    report_text = (
+        f"🎉 <b>РОЗСИЛКА УСПІШНО ЗАВЕРШЕНА!</b>\n"
+        f"────────────────────────────\n"
+        f"✅ Доставлено: <b>{success}</b>\n"
+        f"🔇 Заблокували бота / Неактивні: <b>{blocked}</b>\n"
+        f"❌ Помилки відправки: <b>{failed}</b>\n"
+        f"📊 Оброблено всього: <b>{total}</b>"
+    )
+
+    await context.bot.send_message(
+        chat_id=q.from_user.id,
+        text=report_text,
+        reply_markup=mkb(back_btn("admin_panel")),
+        parse_mode="HTML"
+    )
 
 
-# ── Admin Feedback Handlers ────────────────────────────────────────────────────
+# ── Admin Feedback Handlers (Extended) ─────────────────────────────────────────
 
 @admin_only
 async def adm_feedbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     feedbacks = await async_load(FEEDBACK_KEY, {})
-    sorted_fb = sorted(feedbacks.items(), key=lambda x: x[1].get("created_at",""), reverse=True)[:10]
-    text = f"💬 <b>Відгуки ({len(feedbacks)})</b>\n\n"
+    sorted_fb = sorted(feedbacks.items(), key=lambda x: x[1].get("created_at", ""), reverse=True)[:15]
+
+    text = f"💬 <b>ВІДГУКИ ТА ЗВЕРНЕННЯ ({len(feedbacks)})</b>\n────────────────────────────\n\n"
     kb_rows = []
-    for fid, f in sorted_fb:
-        st   = {"new":"🟢","read":"🔵","replied":"🟣"}.get(f.get("status","new"),"⚪")
-        text += f"{st} <b>#{esc(fid)}</b> — {esc(f.get('first_name','?'))}\n{esc(f.get('feedback','')[:40])}\n\n"
-        kb_rows.append([InlineKeyboardButton(f"✍️ #{fid}", callback_data=f"reply_fb:{fid}")])
+
+    if not sorted_fb:
+        text += "📭 <i>Нових звернень від користувачів немає.</i>"
+    else:
+        for fid, f in sorted_fb:
+            st_icon = {"new": "🟢 Новий", "read": "🔵 Прочитано", "replied": "🟣 Відповідно"}.get(f.get("status", "new"), "⚪")
+            fname = esc(f.get('first_name', 'Клієнт'))
+            fb_snippet = esc(f.get('feedback', '')[:35])
+            
+            text += f"{st_icon} <b>#{esc(fid)}</b> від <b>{fname}</b>\n└ <i>\"{fb_snippet}...\"</i>\n\n"
+            kb_rows.append([InlineKeyboardButton(f"💬 Переглянути #{fid}", callback_data=f"reply_fb:{fid}")])
+
     kb_rows.append(back_btn("admin_panel"))
-    await safe_edit(q, text or "📭 Немає відгуків.", InlineKeyboardMarkup(kb_rows))
+    await safe_edit(q, text, InlineKeyboardMarkup(kb_rows))
 
 
 @admin_only
@@ -2776,91 +3627,137 @@ async def reply_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = q.data.split(":")
     if len(parts) < 2: return
     fid = parts[1]
+
     feedbacks = await async_load(FEEDBACK_KEY, {})
     fb = feedbacks.get(fid, {})
-    if fb:
-        feedbacks[fid]["status"] = "read"
-        await async_save(FEEDBACK_KEY, feedbacks)
+    if not fb:
+        await q.answer("❌ Відгук не знайдено", show_alert=True)
+        return
+
+    # Позначаємо як прочитаний
+    feedbacks[fid]["status"] = "read"
+    await async_save(FEEDBACK_KEY, feedbacks)
+
     context.user_data["reply_to_uid"] = fb.get("user_id")
-    context.user_data["reply_fb_id"]  = fid
-    context.user_data["state"]        = AWAIT_REPLY_TO_USER
-    await safe_edit(q,
-        f"✍️ <b>Відповідь #{esc(fid)}</b>\n\n"
-        f"Від: {esc(fb.get('first_name','?'))}\n{esc(fb.get('feedback','?'))}\n\nВведіть відповідь:")
+    context.user_data["reply_fb_id"] = fid
+    context.user_data["state"] = AWAIT_REPLY_TO_USER
+
+    created_at = fb.get("created_at", "—")[:16]
+    text = (
+        f"✍️ <b>ВІДПОВІДЬ НА ЗВЕРНЕННЯ #{esc(fid)}</b>\n"
+        f"────────────────────────────\n"
+        f"👤 Від кого: <b>{esc(fb.get('first_name','?'))}</b> (ID: <code>{fb.get('user_id')}</code>)\n"
+        f"📅 Дата: <code>{created_at}</code>\n\n"
+        f"💬 <b>Текст звернення:</b>\n"
+        f"<i>\"{esc(fb.get('feedback','?'))}\"</i>\n\n"
+        f"Введіть текст відповіді для користувача:"
+    )
+
+    await safe_edit(q, text, mkb(back_btn("adm_feedbacks")))
 
 
-# ── Admin Settings Handlers ────────────────────────────────────────────────────
+# ── Admin Settings Handlers (Extended) ─────────────────────────────────────────
 
 @admin_only
 async def adm_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     s = await load_settings()
+
     text = (
-        f"⚙️ <b>Налаштування</b>\n\n"
-        f"🛠 Тех. обслуговування: {'🔴 Увімк.' if s.get('maintenance_mode') else '🟢 Вимк.'}\n"
-        f"📦 Нові замовлення: {'✅' if s.get('new_orders_enabled') else '⛔️'}\n\n"
-        f"🤖 AI: {'✅' if AI_ENABLED else '❌ GEMINI_API_KEY не задано'}\n"
-        f"  · Перевірка чеків: {'✅' if s.get('ai_check_receipts',True) else '❌'}\n"
-        f"  · Авто-деплой: {'✅' if s.get('ai_auto_deploy',True) else '❌'}\n"
-        f"  · Підтримка: {'✅' if s.get('ai_support',True) else '❌'}\n\n"
-        f"💳 {esc(s.get('payment_card','—'))}  ({esc(s.get('payment_holder','—'))})"
+        f"⚙️ <b>СИСТЕМНІ НАЛАШТУВАННЯ БОТА</b>\n"
+        f"────────────────────────────\n"
+        f"🛠 Тех. обслуговування: <b>{'🔴 УВІМКНЕНО (доступ закрито)' if s.get('maintenance_mode') else '🟢 ВИМКНЕНО (бот працює)'}</b>\n"
+        f"📦 Прийом замовлень: <b>{'✅ Дозволено' if s.get('new_orders_enabled', True) else '⛔️ Призупинено'}</b>\n\n"
+        f"🤖 <b>AI МОДУЛІ & ІНТЕГРАЦІЇ:</b>\n"
+        f"  · ШІ Перевірка чеків: <b>{'✅ Увімк.' if s.get('ai_check_receipts', True) else '❌ Вимк.'}</b>\n"
+        f"  · Авто-деплой сайтів: <b>{'✅ Увімк.' if s.get('ai_auto_deploy', True) else '❌ Вимк.'}</b>\n"
+        f"  · ШІ Чат-підтримка: <b>{'✅ Увімк.' if s.get('ai_support', True) else '❌ Вимк.'}</b>\n\n"
+        f"💳 <b>РЕКВІЗИТИ ОПЛАТИ:</b>\n"
+        f"  · Картка: <code>{esc(s.get('payment_card','Не задано'))}</code>\n"
+        f"  · Отримувач: <b>{esc(s.get('payment_holder','Не задано'))}</b>"
     )
-    await safe_edit(q, text, mkb(
+
+    kb = mkb(
         [InlineKeyboardButton("🛠 Тех. обслуговування", callback_data="toggle_maintenance"),
          InlineKeyboardButton("📦 Замовлення", callback_data="toggle_orders")],
-        [InlineKeyboardButton("🤖 AI чеки", callback_data="toggle_ai_receipts"),
+        [InlineKeyboardButton("🤖 AI Чеки", callback_data="toggle_ai_receipts"),
          InlineKeyboardButton("🚀 Авто-деплой", callback_data="toggle_ai_deploy")],
-        [InlineKeyboardButton("💬 AI підтримка", callback_data="toggle_ai_support")],
-        [InlineKeyboardButton("💳 Реквізити", callback_data="edit_payment"),
-         InlineKeyboardButton("📝 Привітання", callback_data="edit_welcome")],
-        back_btn("admin_panel"),
-    ))
+        [InlineKeyboardButton("💬 AI Підтримка", callback_data="toggle_ai_support")],
+        [InlineKeyboardButton("💳 Змінити реквізити", callback_data="edit_payment"),
+         InlineKeyboardButton("📝 Текст привітання", callback_data="edit_welcome")],
+        back_btn("admin_panel")
+    )
+    await safe_edit(q, text, kb)
 
 
 @admin_only
 async def toggle_maintenance(update, context):
-    s = await load_settings(); s["maintenance_mode"] = not s.get("maintenance_mode"); await save_settings(s)
+    s = await load_settings()
+    s["maintenance_mode"] = not s.get("maintenance_mode", False)
+    await save_settings(s)
+    log_action("toggle_maintenance", update.effective_user.id, {"state": s["maintenance_mode"]})
     await adm_settings(update, context)
 
 
 @admin_only
 async def toggle_orders(update, context):
-    s = await load_settings(); s["new_orders_enabled"] = not s.get("new_orders_enabled", True); await save_settings(s)
+    s = await load_settings()
+    s["new_orders_enabled"] = not s.get("new_orders_enabled", True)
+    await save_settings(s)
+    log_action("toggle_orders", update.effective_user.id, {"state": s["new_orders_enabled"]})
     await adm_settings(update, context)
 
 
 @admin_only
 async def toggle_ai_receipts(update, context):
-    s = await load_settings(); s["ai_check_receipts"] = not s.get("ai_check_receipts", True); await save_settings(s)
+    s = await load_settings()
+    s["ai_check_receipts"] = not s.get("ai_check_receipts", True)
+    await save_settings(s)
     await adm_settings(update, context)
 
 
 @admin_only
 async def toggle_ai_deploy(update, context):
-    s = await load_settings(); s["ai_auto_deploy"] = not s.get("ai_auto_deploy", True); await save_settings(s)
+    s = await load_settings()
+    s["ai_auto_deploy"] = not s.get("ai_auto_deploy", True)
+    await save_settings(s)
     await adm_settings(update, context)
 
 
 @admin_only
 async def toggle_ai_support(update, context):
-    s = await load_settings(); s["ai_support"] = not s.get("ai_support", True); await save_settings(s)
+    s = await load_settings()
+    s["ai_support"] = not s.get("ai_support", True)
+    await save_settings(s)
     await adm_settings(update, context)
 
 
 @admin_only
 async def edit_payment(update, context):
     context.user_data["state"] = AWAIT_CUSTOM_PAYMENT_TEXT
-    await safe_edit(update.callback_query,
-        "💳 <b>Реквізити</b>\n\nВведіть 3 рядки:\n1) Картка\n2) Отримувач\n3) Посилання Mono (необов'язково)")
+    await safe_edit(
+        update.callback_query,
+        "💳 <b>ВВЕДЕННЯ НОВИХ РЕКВІЗИТІВ</b>\n────────────────────────────\n"
+        "Надішліть дані у 3 рядки:\n"
+        "<b>1-й рядок:</b> Номер картки (напр. 4149 0000 0000 0000)\n"
+        "<b>2-й рядок:</b> ПІБ отримувача (напр. Шевченко Т. Г.)\n"
+        "<b>3-й рядок:</b> Посилання на Monobank / банка (необов'язково)",
+        mkb(back_btn("adm_settings"))
+    )
 
 
 @admin_only
 async def edit_welcome(update, context):
     context.user_data["state"] = AWAIT_WELCOME_TEXT
-    await safe_edit(update.callback_query, "📝 Введіть новий текст привітання (HTML):")
+    await safe_edit(
+        update.callback_query,
+        "📝 <b>ЗМІНА ВІТАЛЬНОГО ТЕКСТУ (/start)</b>\n────────────────────────────\n"
+        "Надішліть новий вітальний текст бота (HTML підтримується):",
+        mkb(back_btn("adm_settings"))
+    )
 
 
-# ── Admin Logs & DB Export Handlers ───────────────────────────────────────────
+# ── Admin Logs & DB Export Handlers (Extended) ────────────────────────────────
 
 @admin_only
 async def adm_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2868,23 +3765,34 @@ async def adm_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logs = await asyncio.to_thread(_db.load_logs_db)
     if not isinstance(logs, list):
         logs = []
-    text = f"📜 <b>Останні дії ({len(logs)})</b>\n\n"
-    for entry in logs[:20]:
-        text += f"🕐 {entry.get('ts','')[:16]} | <code>{esc(entry.get('action','?'))}</code> | {entry.get('uid','?')}\n"
+
+    text = f"📜 <b>ОСТАННІ ДІЇ В СИСТЕМІ ({len(logs)})</b>\n────────────────────────────\n\n"
+    for entry in logs[-15:][::-1]:
+        ts = entry.get('ts', '')[11:16]
+        action = esc(entry.get('action', '?'))
+        uid2 = entry.get('uid', '?')
+        text += f"🕐 <code>{ts}</code> | <b>{action}</b> | User: <code>{uid2}</code>\n"
+
     await safe_edit(q, text, mkb(back_btn("admin_panel")))
 
 
 @admin_only
 async def adm_export_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await safe_edit(q, "📥 <b>Вивантаження БД</b>\n\nОберіть що вивантажити:",
-        mkb([InlineKeyboardButton("👥 Користувачі", callback_data="export:users")],
-            [InlineKeyboardButton("📦 Замовлення",  callback_data="export:orders")],
-            [InlineKeyboardButton("🎟 Промо-коди",  callback_data="export:promos")],
-            [InlineKeyboardButton("💬 Відгуки",     callback_data="export:feedback")],
-            [InlineKeyboardButton("📜 Логи",        callback_data="export:logs")],
-            [InlineKeyboardButton("📊 Вся БД (ZIP)", callback_data="export:all")],
-            back_btn("admin_panel")))
+    await safe_edit(
+        q,
+        "📥 <b>ВИВАНТАЖЕННЯ ТА БЕКАП БАЗИ ДАНИХ</b>\n────────────────────────────\n"
+        "Оберіть потрібний модуль для завантаження JSON або завантажте повну БД у ZIP-архіві:",
+        mkb(
+            [InlineKeyboardButton("👥 Користувачі (JSON)", callback_data="export:users")],
+            [InlineKeyboardButton("📦 Замовлення (JSON)", callback_data="export:orders")],
+            [InlineKeyboardButton("🎟 Промо-коди (JSON)", callback_data="export:promos")],
+            [InlineKeyboardButton("💬 Відгуки (JSON)", callback_data="export:feedback")],
+            [InlineKeyboardButton("📜 Логи дій (JSON)", callback_data="export:logs")],
+            [InlineKeyboardButton("📊 Повний бекап усієї БД (ZIP)", callback_data="export:all")],
+            back_btn("admin_panel")
+        )
+    )
 
 
 @admin_only
@@ -2893,41 +3801,43 @@ async def adm_export_do(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = q.data.split(":")
     if len(parts) < 2: return
     export_type = parts[1]
-    await q.answer("⏳ Готуємо...")
+    await q.answer("⏳ Формуємо файл для завантаження...")
     admin_id = q.from_user.id
 
     try:
         if export_type == "users":
             data = await async_load(USERS_KEY, {})
             filename = f"users_{now_fmt('%Y%m%d_%H%M')}.json"
-            content  = json.dumps(data, ensure_ascii=False, indent=2).encode()
-            caption  = f"👥 Користувачі: {len(data)}"
+            content = json.dumps(data, ensure_ascii=False, indent=2).encode()
+            caption = f"👥 Користувачі: {len(data)} записів"
 
         elif export_type == "orders":
             data = await async_load(ORDERS_KEY, {})
-            export_data = {oid: {k: v for k, v in o.items() if k not in ("js_content", "values_data")}
-                           for oid, o in data.items()}
+            export_data = {
+                oid: {k: v for k, v in o.items() if k not in ("js_content", "values_data")}
+                for oid, o in data.items()
+            }
             filename = f"orders_{now_fmt('%Y%m%d_%H%M')}.json"
-            content  = json.dumps(export_data, ensure_ascii=False, indent=2).encode()
-            caption  = f"📦 Замовлення: {len(data)}"
+            content = json.dumps(export_data, ensure_ascii=False, indent=2).encode()
+            caption = f"📦 Замовлення: {len(data)} записів"
 
         elif export_type == "promos":
             data = await load_promos()
             filename = f"promos_{now_fmt('%Y%m%d_%H%M')}.json"
-            content  = json.dumps(data, ensure_ascii=False, indent=2).encode()
-            caption  = f"🎟 Промо-коди: {len(data)}"
+            content = json.dumps(data, ensure_ascii=False, indent=2).encode()
+            caption = f"🎟 Промо-коди: {len(data)} записів"
 
         elif export_type == "feedback":
             data = await async_load(FEEDBACK_KEY, {})
             filename = f"feedback_{now_fmt('%Y%m%d_%H%M')}.json"
-            content  = json.dumps(data, ensure_ascii=False, indent=2).encode()
-            caption  = f"💬 Відгуки: {len(data)}"
+            content = json.dumps(data, ensure_ascii=False, indent=2).encode()
+            caption = f"💬 Відгуки: {len(data)} записів"
 
         elif export_type == "logs":
             logs = await asyncio.to_thread(_db.load_logs_db)
             filename = f"logs_{now_fmt('%Y%m%d_%H%M')}.json"
-            content  = json.dumps(logs, ensure_ascii=False, indent=2).encode()
-            caption  = f"📜 Логи: {len(logs)}"
+            content = json.dumps(logs, ensure_ascii=False, indent=2).encode()
+            caption = f"📜 Логи дій: {len(logs)} записів"
 
         elif export_type == "all":
             import zipfile
@@ -2936,103 +3846,179 @@ async def adm_export_do(update: Update, context: ContextTypes.DEFAULT_TYPE):
             def make_zip():
                 with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
                     orders_data = _load_sync(ORDERS_KEY, {})
-                    orders_export = {oid: {k: v for k, v in o.items() if k not in ("js_content","values_data")}
-                                     for oid, o in orders_data.items()}
-                    zf.writestr("users.json",    json.dumps(_load_sync(USERS_KEY, {}),    ensure_ascii=False, indent=2))
-                    zf.writestr("orders.json",   json.dumps(orders_export,            ensure_ascii=False, indent=2))
-                    zf.writestr("feedback.json", json.dumps(_load_sync(FEEDBACK_KEY, {}),  ensure_ascii=False, indent=2))
-                    zf.writestr("promos.json",   json.dumps(_load_sync(PROMOS_KEY, {}),    ensure_ascii=False, indent=2))
-                    zf.writestr("settings.json", json.dumps(_load_sync(SETTINGS_KEY, {}),  ensure_ascii=False, indent=2))
-                    zf.writestr("tariffs.json",  json.dumps(_load_sync(TARIFFS_KEY, {}),   ensure_ascii=False, indent=2))
-                    zf.writestr("logs.json",     json.dumps(_db.load_logs_db(),       ensure_ascii=False, indent=2))
+                    orders_export = {
+                        oid: {k: v for k, v in o.items() if k not in ("js_content", "values_data")}
+                        for oid, o in orders_data.items()
+                    }
+                    zf.writestr("users.json", json.dumps(_load_sync(USERS_KEY, {}), ensure_ascii=False, indent=2))
+                    zf.writestr("orders.json", json.dumps(orders_export, ensure_ascii=False, indent=2))
+                    zf.writestr("feedback.json", json.dumps(_load_sync(FEEDBACK_KEY, {}), ensure_ascii=False, indent=2))
+                    zf.writestr("promos.json", json.dumps(_load_sync(PROMOS_KEY, {}), ensure_ascii=False, indent=2))
+                    zf.writestr("settings.json", json.dumps(_load_sync(SETTINGS_KEY, {}), ensure_ascii=False, indent=2))
+                    zf.writestr("tariffs.json", json.dumps(_load_sync(TARIFFS_KEY, {}), ensure_ascii=False, indent=2))
+                    zf.writestr("logs.json", json.dumps(_db.load_logs_db(), ensure_ascii=False, indent=2))
 
             await asyncio.to_thread(make_zip)
             zip_buf.seek(0)
-            filename = f"db_{now_fmt('%Y%m%d_%H%M')}.zip"
-            content  = zip_buf.read()
-            caption  = f"📊 Повна БД | {now_fmt()}"
+            filename = f"full_db_backup_{now_fmt('%Y%m%d_%H%M')}.zip"
+            content = zip_buf.read()
+            caption = f"📊 Повний бекап бази даних | {now_fmt()}"
         else:
-            await q.answer("❌ Невідомий тип", show_alert=True)
+            await q.answer("❌ Невідомий тип експорту", show_alert=True)
             return
 
-        buf = io.BytesIO(content); buf.name = filename
-        await context.bot.send_document(admin_id, buf, caption=caption, parse_mode="HTML")
+        buf = io.BytesIO(content)
+        buf.name = filename
+        await context.bot.send_document(chat_id=admin_id, document=buf, caption=caption, parse_mode="HTML")
         log_action("db_export", admin_id, {"type": export_type})
 
     except Exception as e:
         logger.error("Export error: %s", e, exc_info=True)
-        await context.bot.send_message(admin_id,
-            f"❌ <b>Помилка вивантаження</b>\n\n<code>{esc(str(e)[:300])}</code>",
-            parse_mode="HTML")
+        await context.bot.send_message(
+            chat_id=admin_id,
+            text=f"❌ <b>Помилка під час формування бекапу:</b>\n\n<code>{esc(str(e)[:300])}</code>",
+            parse_mode="HTML"
+        )
 
-
-# ── Other Callbacks ────────────────────────────────────────────────────────────
+# ── Other Callbacks (Extended) ──────────────────────────────────────────────────
 
 async def promo_enter(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Перехід до режиму введення промо-коду під час оформлення замовлення."""
+    q = update.callback_query
     context.user_data["state"] = AWAIT_PROMO_CODE
-    await safe_edit(update.callback_query,
-        "🎟️ <b>Введіть промо-код:</b>", mkb(back_btn("home")))
+    await safe_edit(
+        q,
+        "🎟️ <b>ВВЕДЕННЯ ПРОМО-КОДУ</b>\n────────────────────────────\n"
+        "Введіть ваш промо-код у чат для активації знижки:",
+        mkb(back_btn("catalog"))
+    )
 
 
 async def ref_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Розширена реферальна програма з детальною статистикою."""
     q = update.callback_query
     uid = str(q.from_user.id)
     users = await async_load(USERS_KEY, {})
-    u   = users.get(uid, {})
+    u = users.get(uid, {})
+    
     ref_link = f"https://t.me/{BOT_USERNAME}?start={uid}"
-    await safe_edit(q,
-        f"👥 <b>Реферальна програма</b>\n\nЗа кожного друга — <b>{REFERRAL_REWARD}₴</b>\n\n"
-        f"💰 Баланс: {u.get('balance',0)}₴  ·  Запрошено: {u.get('ref_count',0)}\n"
-        f"Мінімум виводу: {MIN_WITHDRAW}₴\n\n🔗 <code>{ref_link}</code>",
-        mkb([InlineKeyboardButton("💸 Вивести", callback_data="withdraw")], back_btn("home")),
-        disable_web_page_preview=True)
+    ref_count = u.get("ref_count", 0)
+    balance = u.get("balance", 0)
+    earned_total = u.get("ref_earned_total", ref_count * REFERRAL_REWARD)
+
+    text = (
+        f"👥 <b>РЕФЕРАЛЬНА ПРОГРАМА</b>\n"
+        f"────────────────────────────\n"
+        f"Запрошуйте друзів та отримуйте пасивний дохід!\n\n"
+        f"🎁 Ви отримуєте <b>{REFERRAL_REWARD}₴</b> за кожного активного користувача.\n"
+        f"💰 Поточний баланс: <b>{balance}₴</b>\n"
+        f"👥 Запрошено друзів: <b>{ref_count}</b>\n"
+        f"📊 Всього зароблено: <b>{earned_total}₴</b>\n"
+        f"💳 Мінімум для виводу: <b>{MIN_WITHDRAW}₴</b>\n\n"
+        f"🔗 <b>Ваше реферальне посилання:</b>\n"
+        f"<code>{ref_link}</code>"
+    )
+
+    kb = mkb(
+        [InlineKeyboardButton("💸 Вивести кошти", callback_data="withdraw")],
+        back_btn("home")
+    )
+    await safe_edit(q, text, kb, disable_web_page_preview=True)
 
 
 async def withdraw_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка запиту на вивід реферальних коштів."""
     q = update.callback_query
     uid = str(q.from_user.id)
     users = await async_load(USERS_KEY, {})
-    bal = users.get(uid, {}).get("balance", 0)
+    u = users.get(uid, {})
+    bal = u.get("balance", 0)
+
     if bal < MIN_WITHDRAW:
-        await safe_edit(q, f"❌ Мінімум: {MIN_WITHDRAW}₴\nВаш баланс: {bal}₴", mkb(back_btn("ref_menu")))
+        await safe_edit(
+            q,
+            f"❌ <b>Недостатньо коштів для виводу.</b>\n\n"
+            f"Мінімальна сума: <b>{MIN_WITHDRAW}₴</b>\n"
+            f"Ваш баланс: <b>{bal}₴</b>\n\n"
+            f"Запросіть більше друзів за реферальним посиланням!",
+            mkb(back_btn("ref_menu"))
+        )
         return
+
+    # Відправляємо сповіщення усім адмінам з кнопками обробки
+    fname = esc(q.from_user.first_name or "Користувач")
+    uname = f"@{q.from_user.username}" if q.from_user.username else "без username"
+
+    admin_msg = (
+        f"💰 <b>НОВИЙ ЗАПИТ НА ВИВІД КОШТІВ!</b>\n"
+        f"────────────────────────────\n"
+        f"👤 Користувач: <b>{fname}</b> ({uname})\n"
+        f"🆔 ID: <code>{uid}</code>\n"
+        f"💳 Сума виводу: <b>{bal}₴</b>\n"
+        f"📅 Дата запиту: <code>{now_fmt()}</code>"
+    )
+
+    kb_admin = mkb(
+        [InlineKeyboardButton("✅ Підтвердити вивід", callback_data=f"confirm_withdraw:{uid}:{bal}"),
+         InlineKeyboardButton("❌ Відхилити", callback_data=f"reject_withdraw:{uid}:{bal}")]
+    )
+
     for admin_id in ADMIN_IDS:
         try:
-            await context.bot.send_message(admin_id,
-                f"💰 <b>Запит на вивід</b>\n"
-                f"👤 {esc(update.effective_user.first_name)} | 🆔 {uid} | 💳 {bal}₴\n📅 {now_fmt()}",
-                reply_markup=mkb([InlineKeyboardButton("✅ Підтвердити", callback_data=f"confirm_withdraw:{uid}:{bal}")]),
-                parse_mode="HTML")
-        except Exception:
-            pass
-    await safe_edit(q, "✅ <b>Запит відправлено!</b>\nАдміністратор обробить протягом 24 годин. 🌸",
-                    mkb(back_btn("ref_menu")))
+            await context.bot.send_message(admin_id, admin_msg, reply_markup=kb_admin, parse_mode="HTML")
+        except Exception as e:
+            logger.error("Error sending withdraw alert to admin %s: %s", admin_id, e)
+
+    log_action("withdraw_request", uid, {"amount": bal})
+
+    await safe_edit(
+        q,
+        f"✅ <b>Запит на вивід {bal}₴ успішно створено!</b>\n\n"
+        f"Адміністратор обробить ваш виплатний запит протягом 24 годин. Кошти будуть перераховані за картковими реквізитами, вказаними в підтримці. 🌸",
+        mkb(back_btn("ref_menu"))
+    )
 
 
 async def feedback_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню зворотного зв'язку та чату підтримки."""
     context.user_data["state"] = AWAIT_FEEDBACK
-    await safe_edit(update.callback_query,
-        "💬 <b>Написати підтримці</b>\n\nВведіть ваше запитання або пропозицію:", mkb(back_btn("home")))
+    await safe_edit(
+        update.callback_query,
+        "💬 <b>СЛУЖБА ПІДТРИМКИ & ЗВОРОТНИЙ ЗВ'ЯЗОК</b>\n"
+        "────────────────────────────\n"
+        "Введіть ваше запитання, пропозицію або повідомлення про помилку у чат:\n\n"
+        "<i>Оператор відповість вам у найкоротший термін!</i>",
+        mkb(back_btn("home"))
+    )
 
 
 async def about_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Інформація про сервіс та інструкція."""
     s = await load_settings()
-    await safe_edit(update.callback_query,
-        f"🪪 <b>FunsDiia</b> — генерація та зручне управління документами\n\n"
-        "1️⃣ Заповнюйте свої дані один раз у <b>Профілі</b>\n"
-        "2️⃣ Обирайте зручний тариф у <b>Каталозі</b>\n"
-        "3️⃣ Сплачуйте замовлення та отримуйте персональне посилання\n"
-        "4️⃣ Редагуйте свої дані у будь-який час прямо з Профілю!\n\n"
-        f"💳 <code>{esc(s.get('payment_card','—'))}</code>  ({esc(s.get('payment_holder','—'))})\n"
-        "⚡️ Швидке налаштування за лічені хвилини",
-        mkb(back_btn("home")))
+    card = esc(s.get('payment_card', 'За запитом'))
+    holder = esc(s.get('payment_holder', 'FunsDiia Service'))
+
+    text = (
+        f"🪪 <b>FunsDiia Bot</b> — Автоматизований сервіс генерації та деплою персональних веб-кабінетів документів.\n\n"
+        f"<b>ЯК ЦЕ ПРАЦЮЄ:</b>\n"
+        f"1️⃣ Заповнюйте свої дані один раз у розділі 👤 <b>Профіль</b>\n"
+        f"2️⃣ Обирайте бажаний термін дії у 🛒 <b>Каталозі</b>\n"
+        f"3️⃣ Оплачуйте замовлення та отримуйте ваше індивідуальне посилання\n"
+        f"4️⃣ Оновлюйте дані сайту в 1-клік прямо з Профілю в будь-який момент!\n\n"
+        f"💳 <b>Офіційні реквізити оплати:</b>\n"
+        f"<code>{card}</code> ({holder})\n\n"
+        f"⚡️ <i>Захищене з'єднання та 100% збереження ваших даних.</i>"
+    )
+
+    await safe_edit(update.callback_query, text, mkb(back_btn("home")))
 
 
-# ── Global Router ──────────────────────────────────────────────────────────────
+# ── Global Router (Extended & Hardened) ─────────────────────────────────────────
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q   = update.callback_query
-    d   = q.data
+    """Центральний маршрутизатор усіх CallbackQuery оновлень бота."""
+    q = update.callback_query
+    d = q.data
     uid = str(q.from_user.id)
 
     try:
@@ -3040,59 +4026,68 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
+    # Перевірка на заблокованого користувача
     users = await async_load(USERS_KEY, {})
     if users.get(uid, {}).get("banned") and not is_admin(uid):
         try:
-            await q.message.reply_text("🚫 Акаунт заблоковано")
+            await q.message.reply_text("🚫 Ваш акаунт заблоковано адміністратором за порушення правил.")
         except Exception:
             pass
         return
 
     try:
+        # Точні стататичні маршрути
         routes = {
-            "home":                cmd_start,
-            "catalog":             show_catalog,
-            "profile":             show_profile,
-            "profile_edit_menu": profile_edit_menu,
-            "profile_redeploy":  profile_redeploy,
-            "my_orders":          my_orders_handler,
-            "ref_menu":            ref_menu,
-            "withdraw":          withdraw_handler,
-            "feedback":          feedback_menu,
-            "about":             about_handler,
-            "promo_enter":        promo_enter,
-            "admin_panel":        admin_panel,
-            "adm:stats":          adm_stats,
-            "adm:orders":         adm_orders,
-            "adm:users":          adm_users,
-            "adm:search":         adm_search,
-            "adm:balance":        adm_balance,
-            "adm:tariffs":        adm_tariffs,
-            "adm:promos":         adm_promos,
-            "adm:broadcast":      adm_broadcast,
-            "adm:feedbacks":      adm_feedbacks,
-            "adm:settings":       adm_settings,
-            "adm:logs":           adm_logs,
-            "adm:export_db":      adm_export_db,
-            "adm:chain_deploy":  adm_chain_deploy_menu,
-            "chain_deploy_run":  adm_chain_deploy_run,
-            "broadcast_go":      broadcast_go,
-            "tariff_add":        tariff_add,
-            "adm_create_promo":  adm_create_promo,
-            "toggle_maintenance":toggle_maintenance,
-            "toggle_orders":     toggle_orders,
-            "toggle_ai_receipts":toggle_ai_receipts,
-            "toggle_ai_deploy":  toggle_ai_deploy,
-            "toggle_ai_support": toggle_ai_support,
-            "edit_payment":      edit_payment,
-            "edit_welcome":      edit_welcome,
+            "home":                 cmd_start,
+            "catalog":              show_catalog,
+            "profile":              show_profile,
+            "profile_view_photo":   profile_view_photo,
+            "profile_edit_menu":    profile_edit_menu,
+            "profile_redeploy":     profile_redeploy,
+            "buy_use_profile":      buy_use_profile,
+            "buy_start_manual":     buy_start_manual,
+            "skip_address":         skip_address_callback,
+            "my_orders":            my_orders_handler,
+            "ref_menu":             ref_menu,
+            "withdraw":             withdraw_handler,
+            "feedback":             feedback_menu,
+            "about":                about_handler,
+            "promo_enter":          promo_enter,
+            "admin_panel":          admin_panel,
+            "adm:stats":            adm_stats,
+            "adm:orders":           adm_orders,
+            "adm:users":            adm_users,
+            "adm:search":           adm_search,
+            "adm:balance":          adm_balance,
+            "adm:tariffs":          adm_tariffs,
+            "adm:promos":           adm_promos,
+            "adm:broadcast":        adm_broadcast,
+            "adm:feedbacks":        adm_feedbacks,
+            "adm:settings":         adm_settings,
+            "adm:logs":             adm_logs,
+            "adm:export_db":        adm_export_db,
+            "adm:chain_deploy":     adm_chain_deploy_menu,
+            "chain_deploy_run":     adm_chain_deploy_run,
+            "cast_custom":          cast_custom,
+            "cast_custom_edit":     cast_custom_edit,
+            "broadcast_go":         broadcast_go,
+            "tariff_add":           tariff_add,
+            "adm_create_promo":     adm_create_promo,
+            "toggle_maintenance":   toggle_maintenance,
+            "toggle_orders":        toggle_orders,
+            "toggle_ai_receipts":   toggle_ai_receipts,
+            "toggle_ai_deploy":     toggle_ai_deploy,
+            "toggle_ai_support":    toggle_ai_support,
+            "edit_payment":         edit_payment,
+            "edit_welcome":         edit_welcome,
         }
+
         if d in routes:
             return await routes[d](update, context)
 
+        # Динамічні префіксні маршрути
         if d.startswith("p_toggle:"):          return await profile_toggle_field(update, context)
         if d.startswith("p_edit:"):            return await profile_input_prompt(update, context)
-
         if d.startswith("user_ord_view:"):    return await user_ord_view(update, context)
 
         if d.startswith("tar:"):               return await select_tariff(update, context)
@@ -3100,6 +4095,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if d.startswith("rights:"):            return await select_rights(update, context)
         if d.startswith("zagran:"):            return await select_zagran(update, context)
         if d.startswith("diploma:"):           return await select_diploma(update, context)
+
+        # Адмінські динамічні маршрути
+        if d.startswith("adm:users:"):         return await adm_users(update, context)
+        if d.startswith("adm_user_card:"):     
+            parts = d.split(":")
+            if len(parts) > 1 and parts[1] in users:
+                return await _send_user_card(update, context, parts[1], users[parts[1]])
+        if d.startswith("adm_direct_balance:"):return await adm_direct_balance(update, context)
         if d.startswith("adm_approve_deploy:"): return await adm_approve_deploy(update, context)
         if d.startswith("adm_approve:"):       return await adm_approve(update, context)
         if d.startswith("adm_reject:"):        return await adm_reject(update, context)
@@ -3108,144 +4111,211 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if d.startswith("adm_push_go:"):       return await adm_push_go(update, context)
         if d.startswith("adm_send_link:"):     return await adm_send_link(update, context)
         if d.startswith("confirm_withdraw:"):  return await adm_confirm_withdraw(update, context)
+        if d.startswith("reject_withdraw:"):   return await adm_reject_withdraw(update, context)
         if d.startswith("adm_order_view:"):    return await adm_order_view(update, context)
         if d.startswith("adm_order_filter:"):  return await adm_order_filter(update, context)
+
+        # Управління тарифами
         if d.startswith("tariff_toggle:"):     return await tariff_toggle(update, context)
         if d.startswith("tariff_edit:"):       return await tariff_edit(update, context)
-        if d.startswith("tariff_del:"):        return await tariff_del(update, context)
+        if d.startswith("tariff_del_confirm:"):return await tariff_del_confirm(update, context)
+        if d.startswith("tariff_del_do:"):     return await tariff_del_do(update, context)
         if d.startswith("tedit_name:"):        return await tedit_name(update, context)
         if d.startswith("tedit_price:"):       return await tedit_price(update, context)
         if d.startswith("tedit_emoji:"):       return await tedit_emoji(update, context)
+
+        # Промокоди та фідбек
         if d.startswith("promo_toggle:"):      return await promo_toggle(update, context)
-        if d.startswith("promo_del:"):         return await promo_del(update, context)
+        if d.startswith("promo_stat:"):        return await promo_stat(update, context)
+        if d.startswith("promo_del_confirm:"): return await promo_del_confirm(update, context)
+        if d.startswith("promo_del_do:"):      return await promo_del_do(update, context)
+        if d.startswith("cast_tmpl:"):         return await cast_select_template(update, context)
         if d.startswith("reply_fb:"):          return await reply_fb(update, context)
         if d.startswith("adm_ban:"):           return await adm_ban(update, context)
         if d.startswith("adm_vip:"):           return await adm_vip(update, context)
         if d.startswith("adm_msg:"):           return await adm_msg(update, context)
         if d.startswith("export:"):            return await adm_export_do(update, context)
 
-        logger.warning("Unhandled callback data: %s", d)
+        logger.warning("Unhandled callback data received: %s", d)
 
     except Exception as e:
-        logger.error("button_handler error [%s]: %s", d, e, exc_info=True)
+        logger.error("button_handler routing error [%s]: %s", d, e, exc_info=True)
         try:
-            await q.message.reply_text("😔 Сталася помилка. Спробуйте ще раз або натисніть /start.")
+            await q.message.reply_text("😔 Сталася помилка при обробці команди. Спробуйте виконати /start.")
         except Exception:
             pass
 
 
-# ── Additional Commands ────────────────────────────────────────────────────────
+# ── Additional Admin Commands (Extended) ───────────────────────────────────────
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /admin для швидкого виклику адмін-панелі."""
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Немає доступу.")
+        await update.message.reply_text("❌ У вас немає прав доступу до адміністративної панелі.")
         return
-    users  = await async_load(USERS_KEY, {})
+
+    users = await async_load(USERS_KEY, {})
     orders = await async_load(ORDERS_KEY, {})
     pending = sum(1 for o in orders.values() if o.get("status") == "pending")
+
     await update.message.reply_text(
-        f"👑 <b>Адмін-панель</b>\n👥 {len(users)} | ⏳ {pending} в черзі | 🕐 {now_fmt()}",
+        f"👑 <b>АДМІНІСТРАТИВНА ПАНЕЛЬ</b>\n"
+        f"────────────────────────────\n"
+        f"👥 Всього користувачів: <b>{len(users)}</b>\n"
+        f"⏳ В очікуванні перевірки: <b>{pending}</b>\n"
+        f"🕐 Системний час: <code>{now_fmt()}</code>",
         reply_markup=mkb(
-            [InlineKeyboardButton("📊 Статистика",   callback_data="adm:stats"),
-             InlineKeyboardButton("📋 Замовлення",   callback_data="adm:orders")],
-            [InlineKeyboardButton("👥 Користувачі",  callback_data="adm:users"),
-             InlineKeyboardButton("💰 Тарифи",       callback_data="adm:tariffs")],
+            [InlineKeyboardButton("📊 Статистика", callback_data="adm:stats"),
+             InlineKeyboardButton("📋 Замовлення", callback_data="adm:orders")],
+            [InlineKeyboardButton("👥 Користувачі", callback_data="adm:users"),
+             InlineKeyboardButton("💰 Тарифи", callback_data="adm:tariffs")],
+            [InlineKeyboardButton("🎟 Промо-коди", callback_data="adm:promos"),
+             InlineKeyboardButton("📢 Розсилка", callback_data="adm:broadcast")],
             [InlineKeyboardButton("⚙️ Налаштування", callback_data="adm:settings"),
-             InlineKeyboardButton("🚀 Деплой",       callback_data="adm:chain_deploy")],
-            [InlineKeyboardButton("📥 Вивантажити БД", callback_data="adm:export_db")],
-        ), parse_mode="HTML")
+             InlineKeyboardButton("🚀 Деплой", callback_data="adm:chain_deploy")],
+            [InlineKeyboardButton("📥 Вивантажити БД", callback_data="adm:export_db")]
+        ),
+        parse_mode="HTML"
+    )
 
 
 async def cmd_deploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Прямий виклик повного ланцюжка деплою через /deploy."""
     if not is_admin(update.effective_user.id):
         return
+
     msg = await update.message.reply_text("⏳ <b>Запускаємо деплой ланцюжком...</b>", parse_mode="HTML")
     try:
         result = await asyncio.to_thread(chain_deploy.run_full_chain)
         log_action("chain_deploy_cmd", update.effective_user.id, result)
+        
         await msg.edit_text(
-            f"🚀 <b>Деплой завершено!</b>\n\n"
-            f"📁 Папка 2:\n🔗 {esc(result['folder2_url'])}\n\n"
-            f"📁 Папка 1 (з QR):\n🔗 <b>{esc(result['folder1_url'])}</b>\n\n"
-            f"⏱ Зачекайте 1-2 хвилини.",
-            parse_mode="HTML")
+            f"🚀 <b>Деплой успішно завершено!</b>\n\n"
+            f"📁 Папка 2 (Вихідний код):\n🔗 {esc(result['folder2_url'])}\n\n"
+            f"📁 Папка 1 (Кабінет з QR):\n🔗 <b>{esc(result['folder1_url'])}</b>\n\n"
+            f"⏱ <i>Зміни з'являться на сайті протягом 1–2 хвилин.</i>",
+            parse_mode="HTML"
+        )
     except chain_deploy.DeployError as e:
-        await msg.edit_text(f"❌ <b>Помилка деплою</b>\n\n<code>{esc(str(e))}</code>", parse_mode="HTML")
+        await msg.edit_text(f"❌ <b>Помилка під час деплою:</b>\n\n<code>{esc(str(e))}</code>", parse_mode="HTML")
     except Exception as e:
         logger.error("cmd_deploy error: %s", e, exc_info=True)
-        await msg.edit_text(f"❌ <b>Непередбачена помилка</b>\n\n<code>{esc(str(e)[:400])}</code>", parse_mode="HTML")
+        await msg.edit_text(f"❌ <b>Непередбачена помилка деплою:</b>\n\n<code>{esc(str(e)[:400])}</code>", parse_mode="HTML")
 
 
 async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Швидкий виклик вивантаження БД через /export."""
     if not is_admin(update.effective_user.id):
         return
-    await update.message.reply_text("📥 Оберіть:", reply_markup=mkb(
-        [InlineKeyboardButton("👥 Користувачі", callback_data="export:users")],
-        [InlineKeyboardButton("📦 Замовлення",  callback_data="export:orders")],
-        [InlineKeyboardButton("📊 Вся БД (ZIP)", callback_data="export:all")],
-    ), parse_mode="HTML")
+        
+    await update.message.reply_text(
+        "📥 <b>Оберіть модуль для експорту:</b>",
+        reply_markup=mkb(
+            [InlineKeyboardButton("👥 Користувачі", callback_data="export:users")],
+            [InlineKeyboardButton("📦 Замовлення", callback_data="export:orders")],
+            [InlineKeyboardButton("📊 Вся БД (ZIP)", callback_data="export:all")]
+        ),
+        parse_mode="HTML"
+    )
 
 
 async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /ban <user_id>."""
     if not is_admin(update.effective_user.id):
         return
     if not context.args:
-        await update.message.reply_text("Використання: /ban <user_id>"); return
-    uid2 = context.args[0]
+        await update.message.reply_text("Використання: <code>/ban &lt;user_id&gt;</code>", parse_mode="HTML")
+        return
+        
+    uid2 = context.args[0].strip()
     users = await async_load(USERS_KEY, {})
     if uid2 not in users:
-        await update.message.reply_text("❌ Не знайдено"); return
+        await update.message.reply_text("❌ Користувача з таким ID не знайдено.")
+        return
+        
     users[uid2]["banned"] = True
     await async_save(USERS_KEY, users)
-    await update.message.reply_text(f"🚫 {uid2} заблоковано.")
+    log_action("cmd_ban", update.effective_user.id, {"target_uid": uid2})
+    await update.message.reply_text(f"🚫 Користувача <code>{uid2}</code> успішно заблоковано.", parse_mode="HTML")
 
 
 async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /unban <user_id>."""
     if not is_admin(update.effective_user.id):
         return
     if not context.args:
-        await update.message.reply_text("Використання: /unban <user_id>"); return
-    uid2 = context.args[0]
+        await update.message.reply_text("Використання: <code>/unban &lt;user_id&gt;</code>", parse_mode="HTML")
+        return
+        
+    uid2 = context.args[0].strip()
     users = await async_load(USERS_KEY, {})
     if uid2 not in users:
-        await update.message.reply_text("❌ Не знайдено"); return
+        await update.message.reply_text("❌ Користувача з таким ID не знайдено.")
+        return
+        
     users[uid2]["banned"] = False
     await async_save(USERS_KEY, users)
-    await update.message.reply_text(f"✅ {uid2} розблоковано.")
+    log_action("cmd_unban", update.effective_user.id, {"target_uid": uid2})
+    await update.message.reply_text(f"✅ Користувача <code>{uid2}</code> успішно розблоковано.", parse_mode="HTML")
 
 
 async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /balance <user_id> <amount>."""
     if not is_admin(update.effective_user.id):
         return
     if len(context.args) < 2:
-        await update.message.reply_text("Використання: /balance <user_id> <amount>"); return
-    uid2, amount = context.args[0], int(context.args[1])
+        await update.message.reply_text("Використання: <code>/balance &lt;user_id&gt; &lt;amount&gt;</code>", parse_mode="HTML")
+        return
+        
+    uid2 = context.args[0].strip()
+    try:
+        amount = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("❌ Сума має бути цілим числом.")
+        return
+
     users = await async_load(USERS_KEY, {})
     if uid2 not in users:
-        await update.message.reply_text("❌ Не знайдено"); return
-    users[uid2]["balance"] = max(0, users[uid2].get("balance", 0) + amount)
+        await update.message.reply_text("❌ Користувача з таким ID не знайдено.")
+        return
+
+    new_bal = max(0, users[uid2].get("balance", 0) + amount)
+    users[uid2]["balance"] = new_bal
     await async_save(USERS_KEY, users)
-    await update.message.reply_text(f"✅ {uid2} → {users[uid2]['balance']}₴")
+    
+    log_action("cmd_balance", update.effective_user.id, {"target_uid": uid2, "amount": amount, "new_balance": new_bal})
+    await update.message.reply_text(f"✅ Баланс <code>{uid2}</code> змінено! Новий баланс: <b>{new_bal}₴</b>", parse_mode="HTML")
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.error("Global Error: %s", context.error, exc_info=True)
+    """Глобальний обробник помилок бота з інформуванням адміністраторів."""
+    logger.error("Global Error Caught: %s", context.error, exc_info=True)
+    
+    error_msg = (
+        f"❌ <b>КРИТИЧНА ПОМИЛКА БОТА!</b>\n"
+        f"────────────────────────────\n"
+        f"<code>{esc(str(context.error)[:350])}</code>"
+    )
+    
     for admin_id in ADMIN_IDS:
         try:
-            await context.bot.send_message(admin_id,
-                f"❌ <b>Помилка бота</b>\n\n{esc(str(context.error)[:300])}", parse_mode="HTML")
+            await context.bot.send_message(admin_id, error_msg, parse_mode="HTML")
         except Exception:
             pass
 
 
-# ── Main Entrypoint ────────────────────────────────────────────────────────────
+# ── Main Entrypoint (Extended) ─────────────────────────────────────────────────
 
 def main():
+    """Точка запуску Telegram-бота FunsDiia."""
+    # Створення директорії під фото замовлень
     os.makedirs(ORDER_PHOTOS_DIR, exist_ok=True)
 
+    # Ініціалізація структури бази даних
     _db.init_db()
-    logger.info("✅ Базу даних ініціалізовано.")
+    logger.info("✅ Базу даних ініціалізовано успішно.")
 
+    # Маппінг завантаження та збереження модулів
     _DB.update({
         USERS_KEY:    {"load": _db.load_users,       "save": _db.save_users},
         ORDERS_KEY:   {"load": _db.load_orders,      "save": _db.save_orders},
@@ -3255,22 +4325,27 @@ def main():
         SETTINGS_KEY: {"load": _db.load_settings_db, "save": _db.save_settings_db},
     })
 
+    # Перевірка наявності необхідних токенів
     if not PAGES_GH_TOKEN:
-        logger.warning("PAGES_GH_TOKEN не встановлено")
+        logger.warning("⚠️ PAGES_GH_TOKEN не встановлено у змінних оточення!")
     if not os.getenv("GH_TOKEN_2"):
-        logger.warning("GH_TOKEN_2 не встановлено")
+        logger.warning("⚠️ GH_TOKEN_2 не встановлено у змінних оточення!")
     if not GROUP_CHAT_ID:
-        logger.warning("GROUP_CHAT_ID не встановлено")
+        logger.warning("⚠️ GROUP_CHAT_ID не встановлено у змінних оточення!")
 
+    # Побудова додатку python-telegram-bot
     app = Application.builder().token(TOKEN).build()
 
-    app.job_queue.run_repeating(
-        subscription_check_job,
-        interval=3600,
-        first=60,
-        name="subscription_check",
-    )
+    # Фонова задача перевірки підписок щогодини
+    if app.job_queue:
+        app.job_queue.run_repeating(
+            subscription_check_job,
+            interval=3600,
+            first=60,
+            name="subscription_check",
+        )
 
+    # Реєстрація команд
     app.add_handler(CommandHandler("start",   cmd_start))
     app.add_handler(CommandHandler("help",    cmd_start))
     app.add_handler(CommandHandler("admin",   cmd_admin))
@@ -3280,12 +4355,17 @@ def main():
     app.add_handler(CommandHandler("unban",   cmd_unban))
     app.add_handler(CommandHandler("balance", cmd_balance))
 
+    # Реєстрація CallbackQuery та повідомлень
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL | filters.VIDEO, handle_media))
+    
+    # Реєстрація глобальної помилки
     app.add_error_handler(error_handler)
 
-    logger.info("🌸 FunsDiia Bot запущено! Admins: %s | Group: %s", ADMIN_IDS, GROUP_CHAT_ID)
+    logger.info("🌸 FunsDiia Bot успішно запущено! Адміни: %s | Група: %s", ADMIN_IDS, GROUP_CHAT_ID)
+    
+    # Запуск бота у режимі long polling
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
