@@ -1651,6 +1651,265 @@ async def _show_order_summary(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
 
+# ── Admin Reply & State Handlers ───────────────────────────────────────────────
+
+async def _do_reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    target_uid = context.user_data.get("reply_to_uid")
+    fb_id = context.user_data.get("reply_fb_id")
+    text = update.message.text.strip()
+
+    if not target_uid:
+        await update.message.reply_text("❌ Помилка: Отримувача не визначено.")
+        context.user_data["state"] = None
+        return
+
+    try:
+        await context.bot.send_message(
+            target_uid,
+            f"💬 <b>Повідомлення від адміністратора:</b>\n\n{esc(text)}",
+            parse_mode="HTML"
+        )
+        await update.message.reply_text(f"✅ Повідомлення успішно відправлено користувачу <code>{target_uid}</code>.", parse_mode="HTML")
+        
+        if fb_id:
+            feedbacks = await async_load(FEEDBACK_KEY, {})
+            if fb_id in feedbacks:
+                feedbacks[fb_id]["status"] = "replied"
+                await async_save(FEEDBACK_KEY, feedbacks)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Помилка надсилання: {e}")
+
+    context.user_data["state"] = None
+    context.user_data.pop("reply_to_uid", None)
+    context.user_data.pop("reply_fb_id", None)
+
+
+async def _handle_admin_reply_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    reply = update.message.reply_to_message
+    if not reply:
+        return
+
+    target_uid = None
+    if reply.text or reply.caption:
+        content = reply.text or reply.caption
+        match = re.search(r"🆔\s*(\d+)", content) or re.search(r"User:\s*(\d+)", content)
+        if match:
+            target_uid = match.group(1)
+
+    if not target_uid:
+        await update.message.reply_text("⚠️ Не вдалося визначити ID користувача з повідомлення.")
+        return
+
+    try:
+        await context.bot.send_message(
+            target_uid,
+            f"💬 <b>Відповідь адміністратора:</b>\n\n{esc(update.message.text)}",
+            parse_mode="HTML"
+        )
+        await update.message.reply_text(f"✅ Відповідь надіслано користувачу <code>{target_uid}</code>.", parse_mode="HTML")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Помилка відправки: {e}")
+
+
+async def _process_complete_order_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    oid = context.user_data.get("complete_oid")
+    uid2 = context.user_data.get("complete_uid")
+
+    if not oid or not uid2:
+        return
+
+    orders = await async_load(ORDERS_KEY, {})
+    if oid in orders:
+        orders[oid]["status"] = "completed"
+        await async_save(ORDERS_KEY, orders)
+
+    try:
+        await update.message.copy(chat_id=uid2, caption=f"🎉 Ваше замовлення #{oid} виконано!")
+        await update.message.reply_text(f"✅ Файли замовлення #{oid} успішно передано клієнту.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Помилка передачі файлів: {e}")
+
+    context.user_data["state"] = None
+    context.user_data.pop("complete_oid", None)
+    context.user_data.pop("complete_uid", None)
+
+
+async def _handle_admin_state(update: Update, context: ContextTypes.DEFAULT_TYPE, state: int, text: str, uid: str):
+    if state == AWAIT_REJECT_REASON:
+        oid = context.user_data.get("reject_oid")
+        uid2 = context.user_data.get("reject_uid")
+        orders = await async_load(ORDERS_KEY, {})
+        if oid in orders:
+            orders[oid]["status"] = "rejected"
+            orders[oid]["reject_reason"] = text
+            await async_save(ORDERS_KEY, orders)
+            try:
+                await context.bot.send_message(uid2, f"❌ <b>Замовлення #{oid} відхилено.</b>\nПричина: {esc(text)}", parse_mode="HTML")
+            except Exception:
+                pass
+        await update.message.reply_text(f"✅ Замовлення #{oid} відхилено.")
+        context.user_data["state"] = None
+
+    elif state == AWAIT_USER_SEARCH:
+        users = await async_load(USERS_KEY, {})
+        found = None
+        search_query = text.strip().lstrip("@")
+        for u_id, u_data in users.items():
+            if search_query in (u_id, u_data.get("username", ""), u_data.get("first_name", "")):
+                found = (u_id, u_data)
+                break
+        if found:
+            await _send_user_card(update, context, found[0], found[1])
+        else:
+            await update.message.reply_text("❌ Користувача не знайдено.")
+        context.user_data["state"] = None
+
+    elif state == AWAIT_BALANCE_UID:
+        users = await async_load(USERS_KEY, {})
+        if text in users:
+            context.user_data["balance_target_uid"] = text
+            context.user_data["state"] = AWAIT_BALANCE_AMOUNT
+            await update.message.reply_text(f"💰 Введіть суму зміни балансу для {text} (наприклад 100 або -50):")
+        else:
+            await update.message.reply_text("❌ ID не знайдено у базі.")
+            context.user_data["state"] = None
+
+    elif state == AWAIT_BALANCE_AMOUNT:
+        target_uid = context.user_data.get("balance_target_uid")
+        if target_uid and text.lstrip("-").isdigit():
+            amt = int(text)
+            users = await async_load(USERS_KEY, {})
+            if target_uid in users:
+                users[target_uid]["balance"] = max(0, users[target_uid].get("balance", 0) + amt)
+                await async_save(USERS_KEY, users)
+                await update.message.reply_text(f"✅ Баланс користувача {target_uid} оновлено: {users[target_uid]['balance']}₴")
+        else:
+            await update.message.reply_text("❌ Некоректне значення суми.")
+        context.user_data["state"] = None
+
+    elif state == AWAIT_TARIFF_NAME:
+        context.user_data["new_tariff_name"] = text
+        context.user_data["state"] = AWAIT_TARIFF_PRICE
+        await update.message.reply_text("Крок 2/4: Введіть ціну тарифу в гривнях:")
+
+    elif state == AWAIT_TARIFF_PRICE:
+        if text.isdigit():
+            context.user_data["new_tariff_price"] = int(text)
+            context.user_data["state"] = AWAIT_TARIFF_DAYS
+            await update.message.reply_text("Крок 3/4: Введіть кількість днів (або 0 якщо безстроковий):")
+        else:
+            await update.message.reply_text("❌ Ціна має бути числом.")
+
+    elif state == AWAIT_TARIFF_DAYS:
+        if text.isdigit():
+            context.user_data["new_tariff_days"] = int(text) if int(text) > 0 else None
+            context.user_data["state"] = AWAIT_TARIFF_EMOJI
+            await update.message.reply_text("Крок 4/4: Введіть емоджі для тарифу (наприклад 📦):")
+        else:
+            await update.message.reply_text("❌ Кількість днів має бути числом.")
+
+    elif state == AWAIT_TARIFF_EMOJI:
+        tariffs = await load_tariffs()
+        t_key = f"custom_{int(time.time())}"
+        tariffs[t_key] = {
+            "name": context.user_data.get("new_tariff_name"),
+            "price": context.user_data.get("new_tariff_price"),
+            "days": context.user_data.get("new_tariff_days"),
+            "emoji": text.strip() or "📦",
+            "active": True
+        }
+        await save_tariffs(tariffs)
+        await update.message.reply_text("🎉 Новий тариф успішно створено та додано!")
+        context.user_data["state"] = None
+
+    elif state == AWAIT_TARIFF_EDIT_NAME:
+        key = context.user_data.get("edit_tariff_key")
+        tariffs = await load_tariffs()
+        if key in tariffs:
+            tariffs[key]["name"] = text
+            await save_tariffs(tariffs)
+            await update.message.reply_text("✅ Назву тарифу оновлено.")
+        context.user_data["state"] = None
+
+    elif state == AWAIT_TARIFF_EDIT_PRICE:
+        key = context.user_data.get("edit_tariff_key")
+        if text.isdigit():
+            tariffs = await load_tariffs()
+            if key in tariffs:
+                tariffs[key]["price"] = int(text)
+                await save_tariffs(tariffs)
+                await update.message.reply_text("✅ Ціну тарифу оновлено.")
+        else:
+            await update.message.reply_text("❌ Введіть числове значення.")
+        context.user_data["state"] = None
+
+    elif state == AWAIT_TARIFF_EDIT_EMOJI:
+        key = context.user_data.get("edit_tariff_key")
+        tariffs = await load_tariffs()
+        if key in tariffs:
+            tariffs[key]["emoji"] = text.strip()
+            await save_tariffs(tariffs)
+            await update.message.reply_text("✅ Емоджі тарифу оновлено.")
+        context.user_data["state"] = None
+
+    elif state == AWAIT_PROMO_CODE:
+        context.user_data["new_promo_code"] = text.upper().strip()
+        context.user_data["state"] = AWAIT_PROMO_DISCOUNT
+        await update.message.reply_text("Введіть розмір знижки у відсотках (наприклад: 20):")
+
+    elif state == AWAIT_PROMO_DISCOUNT:
+        if text.isdigit():
+            context.user_data["new_promo_discount"] = int(text)
+            context.user_data["state"] = AWAIT_PROMO_USES
+            await update.message.reply_text("Введіть максимальну кількість використань (0 — безліміт):")
+        else:
+            await update.message.reply_text("❌ Введіть числове значення.")
+
+    elif state == AWAIT_PROMO_USES:
+        if text.isdigit():
+            promos = await load_promos()
+            code = context.user_data.get("new_promo_code")
+            promos[code] = {
+                "discount": context.user_data.get("new_promo_discount"),
+                "max_uses": int(text),
+                "uses": 0,
+                "active": True,
+                "created_at": now_str()
+            }
+            await save_promos(promos)
+            await update.message.reply_text(f"🎉 Промо-код <code>{code}</code> успішно створено!", parse_mode="HTML")
+        else:
+            await update.message.reply_text("❌ Введіть числове значення.")
+        context.user_data["state"] = None
+
+    elif state == AWAIT_BROADCAST:
+        context.user_data["broadcast_text"] = text
+        context.user_data["state"] = None
+        users = await async_load(USERS_KEY, {})
+        active_users = sum(1 for u_item in users.values() if not u_item.get("banned"))
+        await update.message.reply_text(
+            f"📢 <b>Текст розсилки збережено!</b>\n\nОтримувачів: <b>{active_users}</b>\n\nНАТИСНІТЬ /admin -> Розсилка -> Підтвердити для старту.",
+            parse_mode="HTML"
+        )
+
+    elif state == AWAIT_CUSTOM_PAYMENT_TEXT:
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        s = await load_settings()
+        if len(lines) >= 1: s["payment_card"] = lines[0]
+        if len(lines) >= 2: s["payment_holder"] = lines[1]
+        if len(lines) >= 3: s["payment_link"] = lines[2]
+        await save_settings(s)
+        await update.message.reply_text("✅ Реквізити оплати успішно оновлено.")
+        context.user_data["state"] = None
+
+    elif state == AWAIT_WELCOME_TEXT:
+        s = await load_settings()
+        s["welcome_text"] = text
+        await save_settings(s)
+        await update.message.reply_text("✅ Вітальний текст оновлено.")
+        context.user_data["state"] = None
+
+
 # ── Text Message Handler ───────────────────────────────────────────────────────
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
