@@ -500,109 +500,278 @@ def values_to_js(d: dict) -> str:
 
 # ── Subscription Checking Background Job ───────────────────────────────────────
 
-def calc_subscription_end(tariff_key: str, tariffs: dict) -> Optional[str]:
-    t = tariffs.get(tariff_key, {})
-    days = t.get("days")
-    if not days:
-        return None
-    end_dt = datetime.now(TIMEZONE) + timedelta(days=days)
-    return end_dt.isoformat()
+REMINDER_DAYS      = (7, 3, 2, 1, 0)    # за скільки днів нагадувати (0 = у день закінчення)
+GRACE_DAYS         = 0                  # скільки днів після кінця ще не блокувати
+SEND_DELAY         = 0.05               # пауза між повідомленнями (ліміт TG ~30/с)
+MAX_SEND_RETRIES   = 3
+SUB_SKIP_STATUSES  = {"expired", "rejected", "pending", "cancelled"}
+SUB_EXPIRE_STATUSES = {"deployed"}
+
+_sub_job_lock = asyncio.Lock()
 
 
-def days_until_expiry(subscription_end: str) -> int:
+def plural_days(n: int) -> str:
+    n = abs(n)
+    if n % 10 == 1 and n % 100 != 11:
+        return "день"
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return "дні"
+    return "днів"
+
+
+def _parse_end_dt(subscription_end: str) -> Optional[datetime]:
     try:
         end_dt = datetime.fromisoformat(subscription_end)
         if end_dt.tzinfo is None:
             end_dt = TIMEZONE.localize(end_dt)
-        delta = end_dt.replace(hour=0, minute=0, second=0, microsecond=0) - \
-                datetime.now(TIMEZONE).replace(hour=0, minute=0, second=0, microsecond=0)
-        return delta.days
+        return end_dt
     except Exception:
+        return None
+
+
+def calc_subscription_end(tariff_key: str, tariffs: dict,
+                          current_end: Optional[str] = None) -> Optional[str]:
+    """Дата закінчення. Якщо передано current_end і підписка ще активна —
+    дні додаються до неї (дострокове продовження без втрати залишку)."""
+    t = tariffs.get(tariff_key, {})
+    days = t.get("days")
+    if not days:
+        return None
+    base = datetime.now(TIMEZONE)
+    if current_end:
+        cur = _parse_end_dt(current_end)
+        if cur and cur > base:
+            base = cur
+    return (base + timedelta(days=days)).isoformat()
+
+
+def days_until_expiry(subscription_end: str) -> int:
+    end_dt = _parse_end_dt(subscription_end)
+    if end_dt is None:
         return 999
+    today   = datetime.now(TIMEZONE).replace(hour=0, minute=0, second=0, microsecond=0)
+    end_day = end_dt.astimezone(TIMEZONE).replace(hour=0, minute=0, second=0, microsecond=0)
+    return (end_day - today).days
+
+
+def _fmt_end(subscription_end: str) -> str:
+    end_dt = _parse_end_dt(subscription_end)
+    return end_dt.astimezone(TIMEZONE).strftime("%d.%m.%Y") if end_dt else "—"
+
+
+def _renew_kb(label: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data="catalog")]])
+
+
+def _reminder_text(days_left: int, order: dict, sub_end: str) -> str:
+    tariff_name = esc(order.get("tariff_name", ""))
+    pages_url   = order.get("pages_url", "")
+    if days_left <= 0:
+        return (
+            "🔴 <b>Сьогодні закінчується підписка!</b>\n\n"
+            f"📦 Тариф: {tariff_name}\n\n"
+            "Без продовження доступ до кабінету буде заблоковано."
+        )
+    cabinet = f"🔗 Ваш кабінет: {pages_url}\n\n" if pages_url else ""
+    return (
+        f"⏰ <b>Підписка закінчується через {days_left} {plural_days(days_left)}!</b>\n\n"
+        f"📦 Тариф: {tariff_name}\n"
+        f"📅 Дійсна до: {_fmt_end(sub_end)}\n\n"
+        f"{cabinet}"
+        "Щоб продовжити доступ — оберіть тариф нижче 👇"
+    )
+
+
+SEND_OK, SEND_BLOCKED, SEND_FAILED = "ok", "blocked", "failed"
+
+
+async def _safe_send(bot, chat_id, text: str, **kwargs) -> str:
+    """Надсилання з ретраями. Повертає ok / blocked / failed."""
+    kwargs.setdefault("parse_mode", "HTML")
+    kwargs.setdefault("disable_web_page_preview", True)
+    for attempt in range(1, MAX_SEND_RETRIES + 1):
+        try:
+            await bot.send_message(chat_id, text, **kwargs)
+            await asyncio.sleep(SEND_DELAY)
+            return SEND_OK
+        except RetryAfter as e:
+            wait = e.retry_after
+            wait = wait.total_seconds() if hasattr(wait, "total_seconds") else float(wait)
+            logger.warning("safe_send [%s]: flood, sleep %.1fs", chat_id, wait)
+            await asyncio.sleep(wait + 1)
+        except Forbidden:
+            return SEND_BLOCKED
+        except BadRequest as e:
+            logger.error("safe_send [%s]: %s", chat_id, e)
+            return SEND_BLOCKED if "chat not found" in str(e).lower() else SEND_FAILED
+        except (TimedOut, NetworkError) as e:
+            logger.warning("safe_send [%s]: network %d/%d: %s", chat_id, attempt, MAX_SEND_RETRIES, e)
+            await asyncio.sleep(2 * attempt)
+        except Exception as e:
+            logger.error("safe_send [%s]: %s", chat_id, e)
+            return SEND_FAILED
+    return SEND_FAILED
+
+
+class _SubStats:
+    def __init__(self):
+        self.checked = self.skipped = self.reminders = self.today = 0
+        self.expired = self.blocked = self.send_failed = self.errors = 0
+        self.duration = 0.0
+
+    @property
+    def events(self) -> int:
+        return self.reminders + self.today + self.expired + self.send_failed + self.errors
+
+    def as_text(self) -> str:
+        return (
+            "📊 <b>Перевірка підписок</b>\n\n"
+            f"Перевірено: {self.checked} (пропущено: {self.skipped})\n"
+            f"⏰ Нагадувань: {self.reminders}\n"
+            f"🔴 «Сьогодні кінець»: {self.today}\n"
+            f"❌ Завершено: {self.expired}\n"
+            f"🚫 Заблокували бота: {self.blocked}\n"
+            f"⚠️ Помилок надсилання: {self.send_failed}\n"
+            f"💥 Внутрішніх помилок: {self.errors}\n"
+            f"⏱ {self.duration:.1f} с"
+        )
+
+
+def _new_patch(expected_end: str) -> dict:
+    return {"expected_end": expected_end, "add_notified": [], "set": {}}
+
+
+def _apply_patch(order: dict, patch: dict) -> bool:
+    """Накладає патч на свіже замовлення. False — якщо підписку вже змінили."""
+    if order.get("subscription_end") != patch["expected_end"]:
+        return False
+    lst = order.setdefault("notified_days", [])
+    for d in patch["add_notified"]:
+        if d not in lst:
+            lst.append(d)
+    order.update(patch["set"])
+    return True
+
+
+async def _process_sub_order(bot, oid: str, order: dict, users: dict,
+                             stats: _SubStats) -> Optional[dict]:
+    sub_end = order.get("subscription_end")
+    status  = order.get("status", "")
+    uid2    = order.get("user_id", "")
+
+    if not sub_end or not uid2 or status in SUB_SKIP_STATUSES:
+        stats.skipped += 1
+        return None
+    if users.get(uid2, {}).get("banned"):
+        stats.skipped += 1
+        return None
+    if _parse_end_dt(sub_end) is None:
+        logger.error("sub_check [%s]: bad subscription_end=%r", oid, sub_end)
+        stats.errors += 1
+        return None
+
+    stats.checked += 1
+    days_left = days_until_expiry(sub_end)
+    notified  = list(order.get("notified_days", []))
+    patch     = _new_patch(sub_end)
+
+    # 1) Нагадування (з наздоганянням: якщо бот лежав — шлемо найактуальніше)
+    if days_left >= 0:
+        due = [d for d in REMINDER_DAYS if days_left <= d and d not in notified]
+        if due:
+            label  = "🔄 Продовжити зараз" if days_left == 0 else "🔄 Продовжити підписку"
+            result = await _safe_send(
+                bot, uid2, _reminder_text(days_left, order, sub_end),
+                reply_markup=_renew_kb(label),
+            )
+            if result == SEND_OK:
+                patch["add_notified"].extend(due)
+                if days_left == 0:
+                    stats.today += 1
+                    log_action("sub_expiring_today", uid2, {"oid": oid})
+                else:
+                    stats.reminders += 1
+                    log_action("sub_reminder", uid2, {"oid": oid, "days_left": days_left})
+            elif result == SEND_BLOCKED:
+                patch["add_notified"].extend(due)      # не спамимо повторами
+                patch["set"]["bot_blocked"] = True
+                stats.blocked += 1
+            else:
+                stats.send_failed += 1                 # спробуємо при наступному запуску
+
+    # 2) Завершення підписки (з урахуванням grace-періоду)
+    if days_left < -GRACE_DAYS and status in SUB_EXPIRE_STATUSES:
+        patch["set"]["status"]     = "expired"
+        patch["set"]["expired_at"] = datetime.now(TIMEZONE).isoformat()
+        stats.expired += 1
+        log_action("sub_expired", uid2, {"oid": oid, "days_overdue": -days_left})
+
+        if not order.get("bot_blocked"):
+            result = await _safe_send(
+                bot, uid2,
+                "❌ <b>Підписка закінчилася!</b>\n\n"
+                "Для відновлення доступу — оформіть нове замовлення 👇",
+                reply_markup=_renew_kb("🔄 Відновити доступ"),
+            )
+            if result == SEND_BLOCKED:
+                patch["set"]["bot_blocked"] = True
+                stats.blocked += 1
+            elif result == SEND_FAILED:
+                stats.send_failed += 1
+
+    return patch if (patch["add_notified"] or patch["set"]) else None
 
 
 async def subscription_check_job(context: ContextTypes.DEFAULT_TYPE):
-    orders = await async_load(ORDERS_KEY, {})
-    users  = await async_load(USERS_KEY, {})
-    now    = datetime.now(TIMEZONE)
-    changed = False
+    if _sub_job_lock.locked():
+        logger.warning("subscription_check_job: already running, skip")
+        return
 
-    for oid, order in orders.items():
-        sub_end = order.get("subscription_end")
-        status  = order.get("status", "")
-        uid2    = order.get("user_id", "")
+    async with _sub_job_lock:
+        started = time.monotonic()
+        stats   = _SubStats()
+        patches: Dict[str, dict] = {}
 
-        if not sub_end or status in ("expired", "rejected", "pending"):
-            continue
-        if users.get(uid2, {}).get("banned"):
-            continue
+        try:
+            orders = await async_load(ORDERS_KEY, {})
+            users  = await async_load(USERS_KEY, {})
 
-        days_left = days_until_expiry(sub_end)
-        notified = order.get("notified_days", [])
-
-        for remind_day in (3, 2, 1):
-            if days_left == remind_day and remind_day not in notified:
-                tariff_name = order.get("tariff_name", "")
-                pages_url   = order.get("pages_url", "")
+            for oid, order in list(orders.items()):
                 try:
-                    await context.bot.send_message(
-                        uid2,
-                        f"⏰ <b>Підписка закінчується через {remind_day} {'день' if remind_day == 1 else 'дні'}!</b>\n\n"
-                        f"📦 Тариф: {esc(tariff_name)}\n"
-                        f"📅 Дійсна до: {datetime.fromisoformat(sub_end).strftime('%d.%m.%Y')}\n\n"
-                        f"{'🔗 Ваш кабінет: ' + pages_url + chr(10) + chr(10) if pages_url else ''}"
-                        f"Щоб продовжити доступ — оберіть тариф нижче 👇",
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("🔄 Продовжити підписку", callback_data="catalog")],
-                        ]),
-                        parse_mode="HTML",
-                        disable_web_page_preview=True,
-                    )
-                    orders[oid].setdefault("notified_days", []).append(remind_day)
-                    changed = True
-                    log_action("sub_reminder", uid2, {"oid": oid, "days_left": remind_day})
+                    patch = await _process_sub_order(context.bot, oid, order, users, stats)
+                    if patch:
+                        patches[oid] = patch
+                except Exception as e:      # одне замовлення не ламає весь цикл
+                    stats.errors += 1
+                    logger.exception("sub_check [%s]: %s", oid, e)
+        finally:
+            # Зберігаємо через свіжу копію, щоб не затерти нові замовлення/продовження
+            if patches:
+                try:
+                    fresh   = await async_load(ORDERS_KEY, {})
+                    applied = 0
+                    for oid, patch in patches.items():
+                        if oid in fresh and _apply_patch(fresh[oid], patch):
+                            applied += 1
+                        else:
+                            logger.info("sub_check [%s]: patch skipped (order changed)", oid)
+                    if applied:
+                        await async_save(ORDERS_KEY, fresh)
                 except Exception as e:
-                    logger.error("sub_reminder send [%s]: %s", uid2, e)
+                    stats.errors += 1
+                    logger.exception("sub_check: save failed: %s", e)
 
-        if days_left == 0 and 0 not in notified:
-            tariff_name = order.get("tariff_name", "")
-            try:
-                await context.bot.send_message(
-                    uid2,
-                    f"🔴 <b>Сьогодні закінчується підписка!</b>\n\n"
-                    f"📦 Тариф: {esc(tariff_name)}\n\n"
-                    f"Без продовження доступ до кабінету буде заблоковано.",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔄 Продовжити зараз", callback_data="catalog")],
-                    ]),
-                    parse_mode="HTML",
-                )
-                orders[oid].setdefault("notified_days", []).append(0)
-                changed = True
-                log_action("sub_expiring_today", uid2, {"oid": oid})
-            except Exception as e:
-                logger.error("sub_expiring_today [%s]: %s", uid2, e)
+            stats.duration = time.monotonic() - started
+            logger.info(
+                "sub_check: checked=%d reminders=%d today=%d expired=%d blocked=%d "
+                "send_failed=%d errors=%d (%.1fs)",
+                stats.checked, stats.reminders, stats.today, stats.expired,
+                stats.blocked, stats.send_failed, stats.errors, stats.duration,
+            )
 
-        if days_left < 0 and status == "deployed":
-            orders[oid]["status"] = "expired"
-            orders[oid]["expired_at"] = now.isoformat()
-            changed = True
-            log_action("sub_expired", uid2, {"oid": oid})
-            try:
-                await context.bot.send_message(
-                    uid2,
-                    f"❌ <b>Підписка закінчилася!</b>\n\n"
-                    f"Для відновлення доступу — оформіть нове замовлення 👇",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔄 Відновити доступ", callback_data="catalog")],
-                    ]),
-                    parse_mode="HTML",
-                )
-            except Exception as e:
-                logger.error("sub_expired notify [%s]: %s", uid2, e)
-
-    if changed:
-        await async_save(ORDERS_KEY, orders)
+        if stats.events:
+            for admin_id in ADMIN_IDS:
+                await _safe_send(context.bot, admin_id, stats.as_text())
 
 
 # ── UI Helpers ─────────────────────────────────────────────────────────────────
