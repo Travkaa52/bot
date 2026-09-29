@@ -35,7 +35,7 @@ from telegram import (
     InlineKeyboardButton, InlineKeyboardMarkup, Update,
     InputFile, BotCommand
 )
-from telegram.error import BadRequest, Forbidden, TelegramError
+from telegram.error import BadRequest, Forbidden, TelegramError, RetryAfter, TimedOut, NetworkError
 from telegram.ext import (
     Application, CallbackQueryHandler, CommandHandler,
     ContextTypes, MessageHandler, filters,
@@ -279,7 +279,7 @@ async def apply_promo(code: str, uid: str):
 
 # ── Google Gemini Integration ──────────────────────────────────────────────────
 
-_GEMINI_MODEL = "gemini-3.5-flash"
+_GEMINI_MODEL = "gemini-2.5-flash"
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 _SYS_SUPPORT = (
@@ -439,7 +439,7 @@ def gen_values_dict(data: dict) -> dict:
         "rnokpp":            _rnd_digits(10),
         "uznr":              f"{random.randint(1990,2010)}0128-{random.randint(10000,99999)}",
         "pass_number":       _rnd_digits(9),
-        "registeredOn":      date_now,
+        "registeredOn":     date_now,
         "legalAdress":       "Харківська область",
         "live":              "Харківська область",
         "bank_adress":       data.get("address") or gen_address(),
@@ -500,9 +500,9 @@ def values_to_js(d: dict) -> str:
 
 # ── Subscription Checking Background Job ───────────────────────────────────────
 
-REMINDER_DAYS      = (7, 3, 2, 1, 0)    # за скільки днів нагадувати (0 = у день закінчення)
-GRACE_DAYS         = 0                  # скільки днів після кінця ще не блокувати
-SEND_DELAY         = 0.05               # пауза між повідомленнями (ліміт TG ~30/с)
+REMINDER_DAYS      = (7, 3, 2, 1, 0)
+GRACE_DAYS         = 0
+SEND_DELAY         = 0.05
 MAX_SEND_RETRIES   = 3
 SUB_SKIP_STATUSES  = {"expired", "rejected", "pending", "cancelled"}
 SUB_EXPIRE_STATUSES = {"deployed"}
@@ -531,8 +531,6 @@ def _parse_end_dt(subscription_end: str) -> Optional[datetime]:
 
 def calc_subscription_end(tariff_key: str, tariffs: dict,
                           current_end: Optional[str] = None) -> Optional[str]:
-    """Дата закінчення. Якщо передано current_end і підписка ще активна —
-    дні додаються до неї (дострокове продовження без втрати залишку)."""
     t = tariffs.get(tariff_key, {})
     days = t.get("days")
     if not days:
@@ -586,7 +584,6 @@ SEND_OK, SEND_BLOCKED, SEND_FAILED = "ok", "blocked", "failed"
 
 
 async def _safe_send(bot, chat_id, text: str, **kwargs) -> str:
-    """Надсилання з ретраями. Повертає ok / blocked / failed."""
     kwargs.setdefault("parse_mode", "HTML")
     kwargs.setdefault("disable_web_page_preview", True)
     for attempt in range(1, MAX_SEND_RETRIES + 1):
@@ -642,7 +639,6 @@ def _new_patch(expected_end: str) -> dict:
 
 
 def _apply_patch(order: dict, patch: dict) -> bool:
-    """Накладає патч на свіже замовлення. False — якщо підписку вже змінили."""
     if order.get("subscription_end") != patch["expected_end"]:
         return False
     lst = order.setdefault("notified_days", [])
@@ -675,7 +671,6 @@ async def _process_sub_order(bot, oid: str, order: dict, users: dict,
     notified  = list(order.get("notified_days", []))
     patch     = _new_patch(sub_end)
 
-    # 1) Нагадування (з наздоганянням: якщо бот лежав — шлемо найактуальніше)
     if days_left >= 0:
         due = [d for d in REMINDER_DAYS if days_left <= d and d not in notified]
         if due:
@@ -693,13 +688,12 @@ async def _process_sub_order(bot, oid: str, order: dict, users: dict,
                     stats.reminders += 1
                     log_action("sub_reminder", uid2, {"oid": oid, "days_left": days_left})
             elif result == SEND_BLOCKED:
-                patch["add_notified"].extend(due)      # не спамимо повторами
+                patch["add_notified"].extend(due)
                 patch["set"]["bot_blocked"] = True
                 stats.blocked += 1
             else:
-                stats.send_failed += 1                 # спробуємо при наступному запуску
+                stats.send_failed += 1
 
-    # 2) Завершення підписки (з урахуванням grace-періоду)
     if days_left < -GRACE_DAYS and status in SUB_EXPIRE_STATUSES:
         patch["set"]["status"]     = "expired"
         patch["set"]["expired_at"] = datetime.now(TIMEZONE).isoformat()
@@ -741,11 +735,10 @@ async def subscription_check_job(context: ContextTypes.DEFAULT_TYPE):
                     patch = await _process_sub_order(context.bot, oid, order, users, stats)
                     if patch:
                         patches[oid] = patch
-                except Exception as e:      # одне замовлення не ламає весь цикл
+                except Exception as e:
                     stats.errors += 1
                     logger.exception("sub_check [%s]: %s", oid, e)
         finally:
-            # Зберігаємо через свіжу копію, щоб не затерти нові замовлення/продовження
             if patches:
                 try:
                     fresh   = await async_load(ORDERS_KEY, {})
@@ -898,12 +891,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "username":        update.effective_user.username,
             "first_name":      update.effective_user.first_name,
             "balance":         0,
-            "referred_by":     ref_by,
-            "ref_count":       0,
+            "referred_by":      ref_by,
+            "ref_count":        0,
             "has_bought":      False,
-            "joined_date":     now_str(),
-            "total_spent":     0,
-            "total_orders":    0,
+            "joined_date":      now_str(),
+            "total_spent":      0,
+            "total_orders":     0,
             "banned":          False,
             "vip":             False,
             "doc_fio":         update.effective_user.first_name or "",
@@ -967,7 +960,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── Profile & Orders Management Handlers (Extended) ───────────────────────────
 
 def _calc_profile_completion(u: dict, photo_path: str = "") -> int:
-    """Обчислює відсоток заповненості профілю користувача."""
     fields = [
         bool(u.get("doc_fio")),
         bool(u.get("doc_dob")),
@@ -978,7 +970,6 @@ def _calc_profile_completion(u: dict, photo_path: str = "") -> int:
 
 
 def _render_progress_bar(percent: int) -> str:
-    """Генерує візуальний прогрес-бар."""
     filled = int(percent / 10)
     return "🟩" * filled + "⬜" * (10 - filled) + f" {percent}%"
 
@@ -1058,7 +1049,6 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def profile_view_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Відображення поточного аватра/фото 3х4 з можливістю його швидкої заміни."""
     q = update.callback_query
     uid = str(q.from_user.id)
     users = await async_load(USERS_KEY, {})
@@ -1171,7 +1161,7 @@ async def profile_input_prompt(update: Update, context: ContextTypes.DEFAULT_TYP
 
     context.user_data["edit_profile_field"] = field
 
-    prompts = {
+    promos = {
         "fio": "📝 Введіть новий **ПІБ** (українською мовою):\n\n<i>Приклад: Шевченко Тарас Григорович</i>\n\n💡 Латинська версія створиться автоматично за допомогою AI.",
         "dob": "📅 Введіть нову **дату народження**:\n\n<i>Формат: ДД.ММ.РРРР (наприклад: 15.05.1998)</i>",
         "addr": "🏠 Введіть нову **адресу прописки**:\n\n<i>Приклад: м. Київ, вул. Хрещатик, буд. 1, кв. 10</i>",
@@ -1183,7 +1173,7 @@ async def profile_input_prompt(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         context.user_data["state"] = EDIT_PROFILE_INPUT_VALUE
 
-    await safe_edit(q, prompts.get(field, "Введіть нове значення:"), mkb([InlineKeyboardButton("❌ Скасувати", callback_data="profile_edit_menu")]))
+    await safe_edit(q, promos.get(field, "Введіть нове значення:"), mkb([InlineKeyboardButton("❌ Скасувати", callback_data="profile_edit_menu")]))
 
 
 async def profile_redeploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1272,7 +1262,7 @@ async def my_orders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_spent = sum(o.get("final_price", 0) for _, o in my if o.get("status") in ("deployed", "completed", "approved"))
 
     text = (
-        f"📂 <b>ІСТОРІЯ ЗАМОВЛЕНЬ</b>\n"
+        f"📂 <b>ІСТОРІЯ ЗАМОВЛЕННЯ</b>\n"
         f"────────────────────────────\n"
         f"📊 Всього замовлень: <b>{len(my)}</b>\n"
         f"💰 Інвестовано в доступ: <b>{total_spent}₴</b>\n\n"
@@ -1316,7 +1306,7 @@ async def user_ord_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     st = status_map.get(o.get("status", ""), o.get("status", "?"))
     url = esc(o.get("pages_url", ""))
-    pages_line = f"\n🔗 <b>Ссылка на кабінет:</b> <a href='{url}'>{url}</a>" if url else ""
+    pages_line = f"\n🔗 <b>Посилання на кабінет:</b> <a href='{url}'>{url}</a>" if url else ""
 
     sub_end = o.get("subscription_end")
     if sub_end:
@@ -1388,7 +1378,6 @@ async def show_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE):
         btn_label = f"{t.get('emoji','📦')} {t.get('name')} — {t.get('price')}₴"
         kb_rows.append([InlineKeyboardButton(btn_label, callback_data=f"tar:{k}")])
 
-    # Перевірка наявності активованої знижки з контексту
     promo_discount = context.user_data.get("promo_discount", 0)
     promo_code = context.user_data.get("promo_code")
     if promo_discount > 0:
@@ -1431,13 +1420,11 @@ async def select_tariff(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "final_price": final_price,
     })
 
-    # Перевірка, чи є у користувача вже збережені дані в Профілі
     users = await async_load(USERS_KEY, {})
     u = users.get(uid, {})
     has_profile_data = bool(u.get("doc_fio") and u.get("doc_dob"))
 
     if has_profile_data:
-        # Пропонуємо заповнення в 1-клік з профілю
         fio = u.get("doc_fio")
         dob = u.get("doc_dob")
         sex_str = "Чоловік ♂️" if u.get("doc_sex", "Ч") in ("Ч", "M") else "Жінка ♀️"
@@ -1462,7 +1449,6 @@ async def select_tariff(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(q, text, kb)
         return
 
-    # Якщо даних немає, переходимо до кроку 1
     context.user_data["state"] = AWAIT_FIO
     await safe_edit(
         q,
@@ -1474,7 +1460,6 @@ async def select_tariff(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def buy_use_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Швидке заповнення майстра з даних Профілю користувача."""
     q = update.callback_query
     uid = str(q.from_user.id)
     users = await async_load(USERS_KEY, {})
@@ -1492,13 +1477,10 @@ async def buy_use_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "is_study": u.get("doc_is_diploma", False),
     })
 
-    # Перевірка наявності збереженого фото
     photo_path = u.get("doc_photo_path")
     if photo_path and os.path.exists(photo_path):
-        # Якщо фото існує, одразу показуємо підсумкове підтвердження
         await _show_order_summary(update, context)
     else:
-        # Якщо фото немає, просимо лише надіслати фото
         context.user_data["state"] = AWAIT_PHOTO
         await safe_edit(
             q,
@@ -1509,7 +1491,6 @@ async def buy_use_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def buy_start_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Примусовий старт ручного введення даних."""
     q = update.callback_query
     context.user_data["state"] = AWAIT_FIO
     t_name = context.user_data.get("tariff_name", "")
@@ -1554,7 +1535,6 @@ async def select_sex(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def skip_address_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обробка пропуску введення адреси через inline-кнопку."""
     q = update.callback_query
     context.user_data["address"] = ""
     context.user_data["state"] = AWAIT_RIGHTS_CHOICE
@@ -1633,7 +1613,6 @@ async def select_diploma(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _show_order_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показ підсумкового екрану перевірки перед генерацією та створенням замовлення."""
     q = update.callback_query
     d = context.user_data
 
@@ -1924,7 +1903,7 @@ async def _process_order(update: Update, context: ContextTypes.DEFAULT_TYPE, uid
         "discount":     discount,
         "price":        base_price,
         "final_price":  final_price,
-        "created_at":   now_str(),
+        "created_at":    now_str(),
         "status":       "pending",
         "photo_path":   photo_path,
         "values_data":  values_data,
@@ -2143,810 +2122,194 @@ async def _handle_referral_bonus(context, uid: str):
     await async_save(USERS_KEY, users)
 
 
-# ── Admin Handlers ─────────────────────────────────────────────────────────────
-
-async def _handle_admin_reply_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reply_text = update.message.reply_to_message.text or update.message.reply_to_message.caption or ""
-    m = re.search(r"🆔\s*(\d+)", reply_text)
-    if not m:
-        await update.message.reply_text("⚠️ Не знайдено ID клієнта в цьому повідомленні.")
-        return
-    client_id = m.group(1)
-    try:
-        await context.bot.send_message(
-            client_id,
-            f"💬 <b>Відповідь адміністратора:</b>\n\n{esc(update.message.text)}\n\n🌸",
-            parse_mode="HTML")
-        await update.message.reply_text(f"✅ Відповідь надіслано → {client_id}")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Помилка: {e}")
-
-
-async def _do_reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    target = context.user_data.get("reply_to_uid")
-    fid    = context.user_data.get("reply_fb_id")
-    if target:
-        try:
-            await context.bot.send_message(
-                target,
-                f"💬 <b>Відповідь адміністратора:</b>\n\n{esc(update.message.text)}\n\n🌸",
-                parse_mode="HTML")
-            if fid:
-                feedbacks = await async_load(FEEDBACK_KEY, {})
-                if fid in feedbacks:
-                    feedbacks[fid]["status"]      = "replied"
-                    feedbacks[fid]["admin_reply"] = update.message.text
-                    await async_save(FEEDBACK_KEY, feedbacks)
-            await update.message.reply_text(f"✅ Відповідь надіслана → {target}")
-        except Exception as e:
-            await update.message.reply_text(f"❌ Помилка: {e}")
-    context.user_data["state"] = None
-    context.user_data.pop("reply_to_uid", None)
-    context.user_data.pop("reply_fb_id",  None)
-
-
-async def _handle_admin_state(update, context, state, text, uid):
-    if state == AWAIT_REPLY_TO_USER:
-        await _do_reply_to_user(update, context); return
-
-    if state == AWAIT_WELCOME_TEXT:
-        s = await load_settings(); s["welcome_text"] = text; await save_settings(s)
-        context.user_data["state"] = None
-        await update.message.reply_text("✅ Текст привітання оновлено!"); return
-
-    if state == AWAIT_BROADCAST:
-        context.user_data["broadcast_text"] = text
-        context.user_data["state"] = None
-        users = await async_load(USERS_KEY, {})
-        await update.message.reply_text(
-            f"📢 <b>Попередній перегляд:</b>\n\n{text}\n\n👥 Отримають: {len(users)}",
-            reply_markup=mkb(
-                [InlineKeyboardButton("✅ Надіслати", callback_data="broadcast_go"),
-                 InlineKeyboardButton("❌ Скасувати", callback_data="admin_panel")],
-            ), parse_mode="HTML"); return
-
-    if state == AWAIT_PROMO_CODE:
-        context.user_data["new_promo_code"] = text.upper().strip()
-        context.user_data["state"] = AWAIT_PROMO_DISCOUNT
-        await update.message.reply_text(f"✅ Код: <b>{esc(context.user_data['new_promo_code'])}</b>\n\nВведіть знижку у %:", parse_mode="HTML"); return
-
-    if state == AWAIT_PROMO_DISCOUNT:
-        try:
-            context.user_data["new_promo_discount"] = int(text)
-            context.user_data["state"] = AWAIT_PROMO_USES
-            await update.message.reply_text(f"✅ Знижка: {text}%\n\nМакс. використань (0 = ∞):")
-        except ValueError:
-            await update.message.reply_text("❌ Введіть число!")
-        return
-
-    if state == AWAIT_PROMO_USES:
-        try:
-            uses = int(text)
-            code = context.user_data["new_promo_code"]
-            promos = await load_promos()
-            promos[code] = {"discount": context.user_data["new_promo_discount"],
-                            "max_uses": uses, "uses": 0, "active": True,
-                            "used_by": [], "created_at": now_str(), "created_by": uid}
-            await save_promos(promos)
-            context.user_data["state"] = None
-            log_action("promo_created", uid, {"code": code})
-            await update.message.reply_text(
-                f"✅ <b>Промо-код</b> <code>{esc(code)}</code>\n💰 {context.user_data['new_promo_discount']}%  |  👥 {'∞' if not uses else uses}",
-                parse_mode="HTML")
-        except ValueError:
-            await update.message.reply_text("❌ Введіть число!")
-        return
-
-    if state == AWAIT_USER_SEARCH:
-        context.user_data["state"] = None
-        users = await async_load(USERS_KEY, {})
-        q = text.strip().lstrip("@")
-        found = [(uid2, u) for uid2, u in users.items()
-                 if q in (u.get("username") or "") or q in str(uid2) or q in (u.get("first_name") or "")]
-        if not found:
-            await update.message.reply_text("🔍 Не знайдено."); return
-        await _send_user_card(update, context, found[0][0], found[0][1]); return
-
-    if state == AWAIT_BALANCE_UID:
-        context.user_data["balance_target_uid"] = text.strip()
-        context.user_data["state"] = AWAIT_BALANCE_AMOUNT
-        await update.message.reply_text("💰 Введіть суму (+ або -):")
-        return
-
-    if state == AWAIT_BALANCE_AMOUNT:
-        try:
-            amount = int(text)
-            target_uid = context.user_data.get("balance_target_uid")
-            users = await async_load(USERS_KEY, {})
-            if target_uid not in users:
-                await update.message.reply_text("❌ Не знайдено.")
-            else:
-                users[target_uid]["balance"] = max(0, users[target_uid].get("balance", 0) + amount)
-                await async_save(USERS_KEY, users)
-                context.user_data["state"] = None
-                await update.message.reply_text(
-                    f"✅ Баланс {target_uid}: {'+' if amount>=0 else ''}{amount}₴\nНовий: {users[target_uid]['balance']}₴")
-        except ValueError:
-            await update.message.reply_text("❌ Введіть число!")
-        return
-
-    if state == AWAIT_CUSTOM_PAYMENT_TEXT:
-        parts = text.split("\n")
-        if len(parts) >= 2:
-            s = await load_settings()
-            s["payment_card"]   = parts[0].strip()
-            s["payment_holder"] = parts[1].strip()
-            if len(parts) >= 3:
-                s["payment_link"] = parts[2].strip()
-            await save_settings(s)
-            context.user_data["state"] = None
-            await update.message.reply_text("✅ Реквізити оновлено!")
-        else:
-            await update.message.reply_text("❌ Мінімум 2 рядки: картка + отримувач")
-        return
-
-    if state == AWAIT_REJECT_REASON:
-        oid = context.user_data.get("reject_oid")
-        client_uid = context.user_data.get("reject_uid")
-        if oid and client_uid:
-            orders = await async_load(ORDERS_KEY, {})
-            if oid in orders:
-                orders[oid]["status"] = "rejected"
-                orders[oid]["reject_reason"] = text
-                await async_save(ORDERS_KEY, orders)
-            try:
-                await context.bot.send_message(client_uid,
-                    f"❌ <b>Замовлення #{esc(oid)} відхилено</b>\n\nПричина: {esc(text)}",
-                    parse_mode="HTML")
-            except Exception:
-                pass
-            context.user_data["state"] = None
-            await update.message.reply_text(f"✅ Замовлення #{oid} відхилено.")
-        return
-
-    if state in (AWAIT_TARIFF_EDIT_PRICE, AWAIT_TARIFF_EDIT_NAME, AWAIT_TARIFF_EDIT_EMOJI):
-        key = context.user_data.get("edit_tariff_key")
-        tariffs = await load_tariffs()
-        if key in tariffs:
-            if state == AWAIT_TARIFF_EDIT_PRICE:
-                try:
-                    tariffs[key]["price"] = int(text)
-                    await save_tariffs(tariffs)
-                    context.user_data["state"] = None
-                    await update.message.reply_text(f"✅ Ціна → {text}₴")
-                except ValueError:
-                    await update.message.reply_text("❌ Введіть число!")
-            elif state == AWAIT_TARIFF_EDIT_NAME:
-                tariffs[key]["name"] = text
-                await save_tariffs(tariffs)
-                context.user_data["state"] = None
-                await update.message.reply_text(f"✅ Назва → {esc(text)}")
-            else:
-                tariffs[key]["emoji"] = text.strip()
-                await save_tariffs(tariffs)
-                context.user_data["state"] = None
-                await update.message.reply_text(f"✅ Емоджі → {text}")
-        return
-
-    if state == AWAIT_TARIFF_NAME:
-        context.user_data["new_t_name"] = text
-        context.user_data["state"] = AWAIT_TARIFF_PRICE
-        await update.message.reply_text("💰 Ціна (₴):"); return
-
-    if state == AWAIT_TARIFF_PRICE:
-        try:
-            context.user_data["new_t_price"] = int(text)
-            context.user_data["state"] = AWAIT_TARIFF_DAYS
-            await update.message.reply_text("📅 Кількість днів (0 = безстроково):")
-        except ValueError:
-            await update.message.reply_text("❌ Введіть число!")
-        return
-
-    if state == AWAIT_TARIFF_DAYS:
-        try:
-            context.user_data["new_t_days"] = int(text) or None
-            context.user_data["state"] = AWAIT_TARIFF_EMOJI
-            await update.message.reply_text("😊 Емоджі (наприклад: 🌟):")
-        except ValueError:
-            await update.message.reply_text("❌ Введіть число!")
-        return
-
-    if state == AWAIT_TARIFF_EMOJI:
-        name  = context.user_data["new_t_name"]
-        price = context.user_data["new_t_price"]
-        days  = context.user_data.get("new_t_days")
-        emj   = text.strip() or "📦"
-        key   = re.sub(r"[^a-z0-9]", "_", name.lower())[:20]
-        tariffs = await load_tariffs()
-        base, c = key, 1
-        while key in tariffs:
-            key = f"{base}_{c}"; c += 1
-        tariffs[key] = {"name": name, "price": price, "days": days, "emoji": emj, "active": True}
-        await save_tariffs(tariffs)
-        context.user_data["state"] = None
-        log_action("tariff_created", uid, {"key": key})
-        await update.message.reply_text(
-            f"✅ Тариф: {emj} {esc(name)} — {price}₴  ({'∞' if not days else f'{days} дн.'})"); return
-
-
-async def _process_complete_order_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    oid = context.user_data.get("complete_oid")
-    client_uid = context.user_data.get("complete_uid")
-    if not oid or not client_uid:
-        return
-    try:
-        caption = f"📁 Ваші файли за замовленням #{esc(oid)} 🌸"
-        if update.message.document:
-            await context.bot.send_document(client_uid, update.message.document.file_id, caption=caption)
-        elif update.message.photo:
-            await context.bot.send_photo(client_uid, update.message.photo[-1].file_id, caption=caption)
-        elif update.message.video:
-            await context.bot.send_video(client_uid, update.message.video.file_id, caption=caption)
-
-        orders = await async_load(ORDERS_KEY, {})
-        if oid in orders:
-            orders[oid]["status"] = "completed"
-            orders[oid]["completed_at"] = now_str()
-            await async_save(ORDERS_KEY, orders)
-            users = await async_load(USERS_KEY, {})
-            if client_uid in users:
-                users[client_uid]["total_spent"] = (
-                    users[client_uid].get("total_spent", 0) + orders[oid].get("final_price", 0))
-                await async_save(USERS_KEY, users)
-
-        log_action("order_completed", None, {"oid": oid})
-        await update.message.reply_text(f"✅ Файли надіслані клієнту {client_uid} (#{oid})")
-        context.user_data["state"] = None
-    except Exception as e:
-        await update.message.reply_text(f"❌ Помилка: {e}")
-
-
-# ── Admin Handlers (Extended & Hardened) ───────────────────────────────────────
-
-async def _handle_admin_reply_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обробка швидкої відповіді адміна через Reply на переслане повідомлення/чек."""
-    reply_text = update.message.reply_to_message.text or update.message.reply_to_message.caption or ""
-    
-    # Шукаємо pattern ID користувача або замовлення
-    m_uid = re.search(r"🆔\s*(\d+)", reply_text)
-    m_oid = re.search(r"#([a-zA-Z0-9_]{6,12})", reply_text)
-    
-    if not m_uid:
-        await update.message.reply_text("⚠️ Не вдалося розпізнати ID клієнта (🆔 XXXXXXXXX) у повідомленні.")
-        return
-
-    client_id = m_uid.group(1)
-    oid_str = f" [до #{m_oid.group(1)}]" if m_oid else ""
-    
-    try:
-        sent_msg = await context.bot.send_message(
-            chat_id=client_id,
-            text=f"💬 <b>Відповідь адміністратора{oid_str}:</b>\n\n{esc(update.message.text)}\n\n🌸 <i>З повагою, команда підтримки</i>",
-            parse_mode="HTML"
-        )
-        log_action("admin_reply_msg", update.effective_user.id, {"target_uid": client_id, "text": update.message.text})
-        await update.message.reply_text(f"✅ Відповідь успішно надіслано клієнту <code>{client_id}</code>", parse_mode="HTML")
-    except Forbidden:
-        await update.message.reply_text(f"❌ Помилка: Клієнт <code>{client_id}</code> заблокував бота.", parse_mode="HTML")
-    except Exception as e:
-        logger.error("Admin reply error: %s", e)
-        await update.message.reply_text(f"❌ Помилка надсилання: {esc(str(e))}")
-
-
-async def _do_reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Надсилання відповіді клієнту у режимі активного FSM-стану AWAIT_REPLY_TO_USER."""
-    target = context.user_data.get("reply_to_uid")
-    fid = context.user_data.get("reply_fb_id")
-
-    if not target:
-        await update.message.reply_text("❌ Помилка: Цільовий ID користувача втрачено у сесії.")
-        context.user_data["state"] = None
-        return
-
-    try:
-        await context.bot.send_message(
-            chat_id=target,
-            text=f"💬 <b>Відповідь адміністратора:</b>\n\n{esc(update.message.text)}\n\n🌸 <i>Якщо у вас є додаткові питання — просто напишіть у цей чат!</i>",
-            parse_mode="HTML"
-        )
-        
-        # Оновлюємо статус тикета/відгуку, якщо reply був прив'язаний до feedback_id
-        if fid:
-            feedbacks = await async_load(FEEDBACK_KEY, {})
-            if fid in feedbacks:
-                feedbacks[fid]["status"] = "replied"
-                feedbacks[fid]["admin_reply"] = update.message.text
-                feedbacks[fid]["replied_at"] = now_str()
-                feedbacks[fid]["replied_by"] = update.effective_user.id
-                await async_save(FEEDBACK_KEY, feedbacks)
-
-        log_action("admin_direct_reply", update.effective_user.id, {"target_uid": target, "fb_id": fid})
-        await update.message.reply_text(f"✅ Повідомлення надіслано користувачу <code>{target}</code>", parse_mode="HTML")
-
-    except Forbidden:
-        await update.message.reply_text(f"❌ Не вдалося надіслати: Користувач <code>{target}</code> зупинив бота.", parse_mode="HTML")
-    except Exception as e:
-        logger.error("Error in _do_reply_to_user: %s", e)
-        await update.message.reply_text(f"❌ Помилка відправки: {esc(str(e))}")
-
-    # Скидаємо стан сесії після завершення
-    context.user_data["state"] = None
-    context.user_data.pop("reply_to_uid", None)
-    context.user_data.pop("reply_fb_id", None)
-
-
-async def _handle_admin_state(update: Update, context: ContextTypes.DEFAULT_TYPE, state: int, text: str, uid: str):
-    """Маршрутизатор FSM-станів адмін-панелі."""
-    
-    # 1. Відповідь користувачу
-    if state == AWAIT_REPLY_TO_USER:
-        await _do_reply_to_user(update, context)
-        return
-
-    # 2. Оновлення вітального тексту
-    if state == AWAIT_WELCOME_TEXT:
-        s = await load_settings()
-        s["welcome_text"] = text
-        await save_settings(s)
-        context.user_data["state"] = None
-        log_action("update_welcome_text", uid)
-        await update.message.reply_text("✅ <b>Текст привітання успішно оновлено!</b>", parse_mode="HTML")
-        return
-
-    # 3. Підготовка масової розсилки
-    if state == AWAIT_BROADCAST:
-        context.user_data["broadcast_text"] = text
-        context.user_data["state"] = None
-        users = await async_load(USERS_KEY, {})
-        active_users = sum(1 for u in users.values() if not u.get("banned"))
-
-        preview_text = (
-            f"📢 <b>ПОПЕРЕДНІЙ ПЕРЕГЛЯД РОЗСИЛКИ:</b>\n"
-            f"────────────────────────────\n"
-            f"{text}\n"
-            f"────────────────────────────\n"
-            f"👥 <b>Отримувачів (активних):</b> {active_users} із {len(users)}"
-        )
-        kb = mkb(
-            [InlineKeyboardButton("✅ Підтвердити та надіслати", callback_data="broadcast_go")],
-            [InlineKeyboardButton("❌ Скасувати", callback_data="admin_panel")]
-        )
-        await update.message.reply_text(preview_text, reply_markup=kb, parse_mode="HTML")
-        return
-
-    # 4. Промокоди: Назва -> Знижка -> Кількість
-    if state == AWAIT_PROMO_CODE:
-        code_clean = text.upper().strip()
-        if not re.match(r"^[A-Z0-9_\-]{2,20}$", code_clean):
-            await update.message.reply_text("❌ Невалідний код. Використовуйте лише латинські літери та цифри (2-20 символів).")
-            return
-
-        promos = await load_promos()
-        warn_msg = "\n⚠️ <i>Увага: Промокод із такою назвою вже існує і буде перезаписаний!</i>" if code_clean in promos else ""
-
-        context.user_data["new_promo_code"] = code_clean
-        context.user_data["state"] = AWAIT_PROMO_DISCOUNT
-        await update.message.reply_text(
-            f"✅ Код: <b><code>{esc(code_clean)}</code></b>{warn_msg}\n\n"
-            f"Введіть розмір знижки у відсотках (від 1 до 100):",
-            parse_mode="HTML"
-        )
-        return
-
-    if state == AWAIT_PROMO_DISCOUNT:
-        try:
-            val = int(text)
-            if not (1 <= val <= 100):
-                raise ValueError
-            context.user_data["new_promo_discount"] = val
-            context.user_data["state"] = AWAIT_PROMO_USES
-            await update.message.reply_text(
-                f"✅ Знижка: <b>{val}%</b>\n\n"
-                f"Введіть максимальну кількість використань (введіть <b>0</b> для необмеженої кількості):",
-                parse_mode="HTML"
-            )
-        except ValueError:
-            await update.message.reply_text("❌ Будь ласка, введіть ціле число від 1 до 100.")
-        return
-
-    if state == AWAIT_PROMO_USES:
-        try:
-            uses = int(text)
-            if uses < 0:
-                raise ValueError
-            
-            code = context.user_data["new_promo_code"]
-            discount = context.user_data["new_promo_discount"]
-            
-            promos = await load_promos()
-            promos[code] = {
-                "discount": discount,
-                "max_uses": uses,
-                "uses": 0,
-                "active": True,
-                "used_by": [],
-                "created_at": now_str(),
-                "created_by": uid
-            }
-            await save_promos(promos)
-            context.user_data["state"] = None
-            log_action("promo_created", uid, {"code": code, "discount": discount, "max_uses": uses})
-            
-            uses_str = "необмежено (∞)" if uses == 0 else f"{uses} разів"
-            await update.message.reply_text(
-                f"🎉 <b>Промо-код успішно створено!</b>\n\n"
-                f"🎟️ Код: <code>{esc(code)}</code>\n"
-                f"💰 Знижка: <b>{discount}%</b>\n"
-                f"👥 Лиміт використань: <b>{uses_str}</b>",
-                parse_mode="HTML"
-            )
-        except ValueError:
-            await update.message.reply_text("❌ Введіть ціле невід'ємне число (0 або більше).")
-        return
-
-    # 5. Пошук користувача
-    if state == AWAIT_USER_SEARCH:
-        context.user_data["state"] = None
-        users = await async_load(USERS_KEY, {})
-        q_raw = text.strip().lstrip("@").lower()
-        
-        found = []
-        for uid2, u in users.items():
-            uname = (u.get("username") or "").lower()
-            fname = (u.get("first_name") or "").lower()
-            doc_fio = (u.get("doc_fio") or "").lower()
-            
-            if q_raw in uname or q_raw in str(uid2) or q_raw in fname or q_raw in doc_fio:
-                found.append((uid2, u))
-
-        if not found:
-            await update.message.reply_text("🔍 Користувача за вашим запитом не знайдено.")
-            return
-
-        if len(found) == 1:
-            await _send_user_card(update, context, found[0][0], found[0][1])
-        else:
-            text_list = f"🔍 <b>Знайдено {len(found)} користувачів:</b>\n\n"
-            kb_rows = []
-            for uid2, u in found[:10]:
-                text_list += f"• <b>{esc(u.get('first_name','?'))}</b> (@{esc(u.get('username','—'))}) — ID: <code>{uid2}</code>\n"
-                kb_rows.append([InlineKeyboardButton(f"👤 {u.get('first_name','?')} ({uid2})", callback_data=f"adm_user_card:{uid2}")])
-            
-            kb_rows.append([InlineKeyboardButton("🔙 В адмін-панель", callback_data="admin_panel")])
-            await update.message.reply_text(text_list, reply_markup=InlineKeyboardMarkup(kb_rows), parse_mode="HTML")
-        return
-
-    # 6. Зміна балансу
-    if state == AWAIT_BALANCE_UID:
-        target_uid = text.strip()
-        users = await async_load(USERS_KEY, {})
-        if target_uid not in users:
-            await update.message.reply_text("❌ Користувача з таким ID не знайдено в базі.")
-            return
-        
-        context.user_data["balance_target_uid"] = target_uid
-        context.user_data["state"] = AWAIT_BALANCE_AMOUNT
-        curr_bal = users[target_uid].get("balance", 0)
-        await update.message.reply_text(
-            f"👤 Користувач: <code>{target_uid}</code>\n"
-            f"💰 Поточний баланс: <b>{curr_bal}₴</b>\n\n"
-            f"Введіть суму для зміни (наприклад <b>100</b> для нарахування або <b>-50</b> для списання):",
-            parse_mode="HTML"
-        )
-        return
-
-    if state == AWAIT_BALANCE_AMOUNT:
-        try:
-            amount = int(text)
-            target_uid = context.user_data.get("balance_target_uid")
-            users = await async_load(USERS_KEY, {})
-            
-            if target_uid not in users:
-                await update.message.reply_text("❌ Помилка: Сесія втрачена.")
-            else:
-                old_bal = users[target_uid].get("balance", 0)
-                new_bal = max(0, old_bal + amount)
-                users[target_uid]["balance"] = new_bal
-                await async_save(USERS_KEY, users)
-                
-                context.user_data["state"] = None
-                log_action("balance_change", uid, {"target": target_uid, "delta": amount, "new_balance": new_bal})
-                
-                # Повідомляємо користувача
-                try:
-                    sign = "+" if amount > 0 else ""
-                    await context.bot.send_message(
-                        target_uid,
-                        f"💳 <b>Зміна балансу!</b>\n\nОперація: <b>{sign}{amount}₴</b>\nВаш новий баланс: <b>{new_bal}₴</b>",
-                        parse_mode="HTML"
-                    )
-                except Exception:
-                    pass
-
-                await update.message.reply_text(
-                    f"✅ <b>Баланс оновлено!</b>\n\n"
-                    f"🆔 Користувач: <code>{target_uid}</code>\n"
-                    f"📊 Було: {old_bal}₴  ➜  <b>Стало: {new_bal}₴</b>",
-                    parse_mode="HTML"
-                )
-        except ValueError:
-            await update.message.reply_text("❌ Введіть коректне ціле число.")
-        return
-
-    # 7. Налаштування реквізитів
-    if state == AWAIT_CUSTOM_PAYMENT_TEXT:
-        parts = [p.strip() for p in text.split("\n") if p.strip()]
-        if len(parts) >= 2:
-            s = await load_settings()
-            s["payment_card"] = parts[0]
-            s["payment_holder"] = parts[1]
-            if len(parts) >= 3:
-                s["payment_link"] = parts[2]
-            await save_settings(s)
-            
-            context.user_data["state"] = None
-            log_action("update_payment_details", uid)
-            await update.message.reply_text(
-                f"✅ <b>Реквізити збережено!</b>\n\n"
-                f"💳 Картка: <code>{esc(parts[0])}</code>\n"
-                f"👤 Отримувач: <b>{esc(parts[1])}</b>\n"
-                f"🔗 Посилання: {esc(parts[2] if len(parts)>=3 else '—')}",
-                parse_mode="HTML"
-            )
-        else:
-            await update.message.reply_text("❌ Потрібно ввести мінімум 2 рядки:\n1-й рядок: Номер картки\n2-й рядок: ПІБ/Назва банку отримувача")
-        return
-
-    # 8. Відхилення замовлення з причиною
-    if state == AWAIT_REJECT_REASON:
-        oid = context.user_data.get("reject_oid")
-        client_uid = context.user_data.get("reject_uid")
-        
-        if oid and client_uid:
-            orders = await async_load(ORDERS_KEY, {})
-            if oid in orders:
-                orders[oid]["status"] = "rejected"
-                orders[oid]["reject_reason"] = text
-                orders[oid]["rejected_at"] = now_str()
-                orders[oid]["rejected_by"] = uid
-                await async_save(ORDERS_KEY, orders)
-
-            try:
-                await context.bot.send_message(
-                    client_uid,
-                    f"❌ <b>Ваше замовлення #{esc(oid)} відхилено</b>\n\n"
-                    f"💬 <b>Причина:</b> {esc(text)}\n\n"
-                    f"<i>Якщо ви вважаєте це помилкою, зв'яжіться з підтримкою через розділ 💬 Підтримка.</i>",
-                    parse_mode="HTML"
-                )
-            except Exception as e:
-                logger.error("Error notifying user of reject: %s", e)
-
-            context.user_data["state"] = None
-            log_action("order_rejected", uid, {"oid": oid, "reason": text})
-            await update.message.reply_text(f"✅ Замовлення <code>#{oid}</code> відхилено, клієнта сповіщено.", parse_mode="HTML")
-        return
-
-    # 9. Редагування тарифу
-    if state in (AWAIT_TARIFF_EDIT_PRICE, AWAIT_TARIFF_EDIT_NAME, AWAIT_TARIFF_EDIT_EMOJI):
-        key = context.user_data.get("edit_tariff_key")
-        tariffs = await load_tariffs()
-        if key in tariffs:
-            if state == AWAIT_TARIFF_EDIT_PRICE:
-                try:
-                    new_p = int(text)
-                    tariffs[key]["price"] = new_p
-                    await save_tariffs(tariffs)
-                    context.user_data["state"] = None
-                    await update.message.reply_text(f"✅ Ціну тарифу <b>{esc(tariffs[key]['name'])}</b> змінено на <b>{new_p}₴</b>", parse_mode="HTML")
-                except ValueError:
-                    await update.message.reply_text("❌ Введіть коректну ціну числом.")
-            elif state == AWAIT_TARIFF_EDIT_NAME:
-                tariffs[key]["name"] = text.strip()
-                await save_tariffs(tariffs)
-                context.user_data["state"] = None
-                await update.message.reply_text(f"✅ Назву тарифу оновлено на <b>{esc(text)}</b>", parse_mode="HTML")
-            elif state == AWAIT_TARIFF_EDIT_EMOJI:
-                tariffs[key]["emoji"] = text.strip()
-                await save_tariffs(tariffs)
-                context.user_data["state"] = None
-                await update.message.reply_text(f"✅ Емоджі тарифу змінено на {text.strip()}")
-        return
-
-    # 10. Створення нового тарифу
-    if state == AWAIT_TARIFF_NAME:
-        context.user_data["new_t_name"] = text.strip()
-        context.user_data["state"] = AWAIT_TARIFF_PRICE
-        await update.message.reply_text("💰 Введіть ціну тарифу в гривнях (числом):")
-        return
-
-    if state == AWAIT_TARIFF_PRICE:
-        try:
-            val = int(text)
-            context.user_data["new_t_price"] = val
-            context.user_data["state"] = AWAIT_TARIFF_DAYS
-            await update.message.reply_text("📅 Введіть кількість днів дії підписки (введіть <b>0</b> для безстрокового тарифу):", parse_mode="HTML")
-        except ValueError:
-            await update.message.reply_text("❌ Введіть ціле число.")
-        return
-
-    if state == AWAIT_TARIFF_DAYS:
-        try:
-            days_val = int(text)
-            context.user_data["new_t_days"] = days_val if days_val > 0 else None
-            context.user_data["state"] = AWAIT_TARIFF_EMOJI
-            await update.message.reply_text("😊 Надішліть емоджі для тарифу (наприклад: 🌟, 💎, 📅):")
-        except ValueError:
-            await update.message.reply_text("❌ Введіть ціле число.")
-        return
-
-    if state == AWAIT_TARIFF_EMOJI:
-        name = context.user_data["new_t_name"]
-        price = context.user_data["new_t_price"]
-        days = context.user_data.get("new_t_days")
-        emj = text.strip() or "📦"
-        
-        # Генерація унікального ключа
-        key = re.sub(r"[^a-z0-9]", "_", name.lower())[:20]
-        tariffs = await load_tariffs()
-        base, c = key, 1
-        while key in tariffs:
-            key = f"{base}_{c}"
-            c += 1
-
-        tariffs[key] = {
-            "name": name,
-            "price": price,
-            "days": days,
-            "emoji": emj,
-            "active": True
-        }
-        await save_tariffs(tariffs)
-        context.user_data["state"] = None
-        log_action("tariff_created", uid, {"key": key, "name": name, "price": price})
-        
-        days_str = "безстроково (∞)" if not days else f"{days} днів"
-        await update.message.reply_text(
-            f"🎉 <b>Тариф успішно створено!</b>\n\n"
-            f"{emj} <b>{esc(name)}</b> — <b>{price}₴</b> ({days_str})",
-            parse_mode="HTML"
-        )
-        return
-
-
-async def _process_complete_order_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обробка відправки готових файлів/документів від адміна клієнту."""
-    oid = context.user_data.get("complete_oid")
-    client_uid = context.user_data.get("complete_uid")
-    
-    if not oid or not client_uid:
-        await update.message.reply_text("❌ Помилка: Контекст замовлення втрачено.")
-        context.user_data["state"] = None
-        return
-
-    caption = f"📁 <b>Ваше замовлення #{esc(oid)} виконано!</b>\n\nДякуємо, що обираєте наш сервіс 🌸"
-
-    try:
-        if update.message.document:
-            await context.bot.send_document(chat_id=client_uid, document=update.message.document.file_id, caption=caption, parse_mode="HTML")
-        elif update.message.photo:
-            await context.bot.send_photo(chat_id=client_uid, photo=update.message.photo[-1].file_id, caption=caption, parse_mode="HTML")
-        elif update.message.video:
-            await context.bot.send_video(chat_id=client_uid, video=update.message.video.file_id, caption=caption, parse_mode="HTML")
-        elif update.message.audio:
-            await context.bot.send_audio(chat_id=client_uid, audio=update.message.audio.file_id, caption=caption, parse_mode="HTML")
-        else:
-            await update.message.reply_text("⚠️ Непідтримуваний тип файлу. Надішліть документ, фото або відео.")
-            return
-
-        # Оновлюємо статус у БД
-        orders = await async_load(ORDERS_KEY, {})
-        if oid in orders:
-            orders[oid]["status"] = "completed"
-            orders[oid]["completed_at"] = now_str()
-            orders[oid]["completed_by"] = update.effective_user.id
-            await async_save(ORDERS_KEY, orders)
-
-            # Нараховуємо загальну суму витрат користувачу
-            users = await async_load(USERS_KEY, {})
-            if client_uid in users:
-                spent = orders[oid].get("final_price", 0)
-                users[client_uid]["total_spent"] = users[client_uid].get("total_spent", 0) + spent
-                await async_save(USERS_KEY, users)
-
-        log_action("order_completed_files", update.effective_user.id, {"oid": oid, "client_uid": client_uid})
-        await update.message.reply_text(f"✅ Файли успішно відправлені клієнту <code>{client_uid}</code>. Замовлення <code>#{oid}</code> закрито!", parse_mode="HTML")
-        context.user_data["state"] = None
-
-    except Forbidden:
-        await update.message.reply_text(f"❌ Клієнт <code>{client_uid}</code> заблокував бота.", parse_mode="HTML")
-    except Exception as e:
-        logger.error("Error sending complete order files: %s", e)
-        await update.message.reply_text(f"❌ Помилка при відправці файлів: {esc(str(e))}")
-
-
-# ── Admin User Management Handlers (Extended) ──────────────────────────────────
-
-USERS_PER_PAGE = 10
+# ── Admin Panel Core Callbacks & Auxiliary Functions ─────────────────────────
 
 @admin_only
-async def adm_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Список користувачів з підтримкою пагінації."""
-    q = update.callback_query
-    page = 1
-    if q and q.data and ":" in q.data:
-        try:
-            page = int(q.data.split(":")[1])
-        except ValueError:
-            page = 1
-
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = await async_load(USERS_KEY, {})
-    sorted_u = sorted(users.items(), key=lambda x: x[1].get("joined_date", ""), reverse=True)
+    orders = await async_load(ORDERS_KEY, {})
+    pending = sum(1 for o in orders.values() if o.get("status") == "pending")
+
+    msg = (
+        f"⚙️ <b>ГОЛОВНЕ МЕНЮ АДМІНІСТРАТОРА</b>\n"
+        f"────────────────────────────\n"
+        f"👥 Користувачів: <b>{len(users)}</b>\n"
+        f"⏳ Очікують перевірки: <b>{pending}</b>\n"
+        f"🕐 Системний час: <code>{now_fmt()}</code>"
+    )
+    kb = mkb(
+        [InlineKeyboardButton("📊 Статистика", callback_data="adm:stats"),
+         InlineKeyboardButton("📋 Замовлення", callback_data="adm:orders")],
+        [InlineKeyboardButton("👥 Користувачі", callback_data="adm:users"),
+         InlineKeyboardButton("💰 Тарифи", callback_data="adm:tariffs")],
+        [InlineKeyboardButton("🎟 Промо-коди", callback_data="adm:promos"),
+         InlineKeyboardButton("📢 Розсилка", callback_data="adm:broadcast")],
+        [InlineKeyboardButton("⚙️ Налаштування", callback_data="adm:settings"),
+         InlineKeyboardButton("🚀 Деплой", callback_data="adm:chain_deploy")],
+        [InlineKeyboardButton("💬 Відгуки", callback_data="adm:feedbacks"),
+         InlineKeyboardButton("📜 Логи", callback_data="adm:logs")],
+        [InlineKeyboardButton("📥 Вивантажити БД", callback_data="adm:export_db")],
+        back_btn("home")
+    )
+    if update.callback_query:
+        await safe_edit(update.callback_query, msg, kb)
+    else:
+        await update.message.reply_text(msg, reply_markup=kb, parse_mode="HTML")
+
+
+@admin_only
+async def adm_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    users = await async_load(USERS_KEY, {})
+    orders = await async_load(ORDERS_KEY, {})
     
-    total_users = len(sorted_u)
-    total_pages = max(1, (total_users + USERS_PER_PAGE - 1) // USERS_PER_PAGE)
-    page = max(1, min(page, total_pages))
+    total_revenue = sum(o.get("final_price", 0) for o in orders.values() if o.get("status") in ("completed", "deployed"))
+    
+    text = (
+        f"📊 <b>ГЛИБОКА СТАТИСТИКА БОТА</b>\n"
+        f"────────────────────────────\n"
+        f"👥 Всього користувачів: <b>{len(users)}</b>\n"
+        f"📦 Всього замовлень: <b>{len(orders)}</b>\n"
+        f"💰 Загальний виручка: <b>{total_revenue}₴</b>\n"
+    )
+    await safe_edit(q, text, mkb(back_btn("admin_panel")))
 
-    start_idx = (page - 1) * USERS_PER_PAGE
-    end_idx = start_idx + USERS_PER_PAGE
-    page_users = sorted_u[start_idx:end_idx]
 
-    text = f"👥 <b>УПРАВЛІННЯ КОРИСТУВАЧАМИ</b> (Стор. {page}/{total_pages})\n"
-    text += f"────────────────────────────\n"
-    text += f"📊 Всього у базі: <b>{total_users}</b>\n\n"
-
-    for uid2, u in page_users:
-        badges = ("👑 " if u.get("vip") else "") + ("🚫 " if u.get("banned") else "") + ("💰 " if u.get("has_bought") else "🆕 ")
-        fname = esc(u.get('first_name', 'Користувач'))
-        uname = f"@{esc(u.get('username'))}" if u.get('username') else "без username"
-        
-        text += f"{badges}<b>{fname}</b> ({uname})\n"
-        text += f"└ 🆔 <code>{uid2}</code> | 💳 {u.get('balance', 0)}₴ | 👥 {u.get('ref_count', 0)}\n\n"
-
+@admin_only
+async def adm_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    orders = await async_load(ORDERS_KEY, {})
+    
     kb_rows = []
-    
-    # Кнопки пагінації
-    nav_btns = []
-    if page > 1:
-        nav_btns.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"adm:users:{page - 1}"))
-    nav_btns.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop"))
-    if page < total_pages:
-        nav_btns.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"adm:users:{page + 1}"))
-    kb_rows.append(nav_btns)
-
-    kb_rows.append([
-        InlineKeyboardButton("🔍 Пошук", callback_data="adm:search"),
-        InlineKeyboardButton("💰 Змінити баланс", callback_data="adm:balance")
-    ])
+    for oid, o in list(orders.items())[-10:][::-1]:
+        st = o.get("status", "pending")
+        kb_rows.append([InlineKeyboardButton(f"#{oid} ({st}) - {o.get('final_price')}₴", callback_data=f"adm_order_view:{oid}")])
+        
     kb_rows.append(back_btn("admin_panel"))
-
-    await safe_edit(q, text, InlineKeyboardMarkup(kb_rows))
-
-
-@admin_only
-async def adm_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["state"] = AWAIT_USER_SEARCH
-    await safe_edit(
-        update.callback_query,
-        "🔍 <b>ПОШУК КОРИСТУВАЧА</b>\n────────────────────────────\n"
-        "Введіть @username, Telegram ID або ПІБ для пошуку:",
-        mkb(back_btn("admin_panel"))
-    )
+    await safe_edit(q, f"📋 <b>ОСТАННІ ЗАМОВЛЕННЯ ({len(orders)})</b>", InlineKeyboardMarkup(kb_rows))
 
 
 @admin_only
-async def adm_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["state"] = AWAIT_BALANCE_UID
-    await safe_edit(
-        update.callback_query,
-        "💰 <b>ЗМІНА БАЛАНСУ</b>\n────────────────────────────\n"
-        "Введіть Telegram ID користувача:",
-        mkb(back_btn("admin_panel"))
-    )
+async def adm_order_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    oid = q.data.split(":")[1]
+    orders = await async_load(ORDERS_KEY, {})
+    o = orders.get(oid)
+    if not o:
+        await q.answer("Замовлення не знайдено", show_alert=True)
+        return
+    text = f"📦 <b>Замовлення #{oid}</b>\nКористувач: <code>{o.get('user_id')}</code>\nСума: {o.get('final_price')}₴\nСтатус: {o.get('status')}"
+    await safe_edit(q, text, mkb(back_btn("adm:orders")))
+
+
+@admin_only
+async def adm_order_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    pass
+
+
+@admin_only
+async def adm_chain_deploy_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    text = "🚀 <b>ЛАНЦЮГОВИЙ ДЕПЛОЙ</b>\n\nЗапуск повного циклу генерації та публікації даних."
+    kb = mkb([InlineKeyboardButton("▶️ Запустити деплой зараз", callback_data="chain_deploy_run")], back_btn("admin_panel"))
+    await safe_edit(q, text, kb)
+
+
+@admin_only
+async def adm_chain_deploy_run(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await safe_edit(q, "⏳ Проводиться автоматичний деплой...")
+    try:
+        res = await asyncio.to_thread(chain_deploy.run_full_chain)
+        await safe_edit(q, f"✅ Деплой успішно виконано!\n🔗 URL: {res.get('folder1_url')}", mkb(back_btn("admin_panel")))
+    except Exception as e:
+        await safe_edit(q, f"❌ Помилка деплою: {esc(str(e))}", mkb(back_btn("admin_panel")))
+
+
+@admin_only
+async def adm_approve_deploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    parts = q.data.split(":")
+    uid2, oid = parts[1], parts[2]
+    orders = await async_load(ORDERS_KEY, {})
+    if oid in orders:
+        orders[oid]["status"] = "approved"
+        await async_save(ORDERS_KEY, orders)
+        await q.answer("Підтверджено!")
+        try:
+            url = await _run_chain_deploy(oid, orders[oid])
+            orders[oid]["pages_url"] = url
+            orders[oid]["status"] = "deployed"
+            await async_save(ORDERS_KEY, orders)
+            await context.bot.send_message(uid2, f"🎉 Ваше замовлення #{oid} готове!\n🔗 {url}")
+        except Exception as e:
+            await context.bot.send_message(q.from_user.id, f"Помилка деплою: {e}")
+
+
+@admin_only
+async def adm_approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    parts = q.data.split(":")
+    uid2, oid = parts[1], parts[2]
+    orders = await async_load(ORDERS_KEY, {})
+    if oid in orders:
+        orders[oid]["status"] = "approved"
+        await async_save(ORDERS_KEY, orders)
+        await q.answer("Оплату підтверджено!")
+        await context.bot.send_message(uid2, f"✅ Оплату за замовлення #{oid} підтверджено.")
+
+
+@admin_only
+async def adm_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    parts = q.data.split(":")
+    uid2, oid = parts[1], parts[2]
+    context.user_data["state"] = AWAIT_REJECT_REASON
+    context.user_data["reject_oid"] = oid
+    context.user_data["reject_uid"] = uid2
+    await safe_edit(q, f"Введіть причину відхилення для замовлення #{oid}:")
+
+
+@admin_only
+async def adm_complete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    parts = q.data.split(":")
+    uid2, oid = parts[1], parts[2]
+    context.user_data["state"] = AWAIT_ORDER_COMPLETE_FILE
+    context.user_data["complete_oid"] = oid
+    context.user_data["complete_uid"] = uid2
+    await safe_edit(q, f"Надішліть готовий файл для клієнта #{oid}:")
+
+
+@admin_only
+async def adm_push_pages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    parts = q.data.split(":")
+    uid2, oid = parts[1], parts[2]
+    orders = await async_load(ORDERS_KEY, {})
+    if oid in orders:
+        try:
+            url = await _run_chain_deploy(oid, orders[oid])
+            orders[oid]["pages_url"] = url
+            orders[oid]["status"] = "deployed"
+            await async_save(ORDERS_KEY, orders)
+            await q.answer("Деплой виконано!")
+            await context.bot.send_message(uid2, f"🎉 Ваше замовлення #{oid} задеплоєно!\n🔗 {url}")
+        except Exception as e:
+            await q.answer(f"Помилка: {e}", show_alert=True)
+
+
+@admin_only
+async def adm_push_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    pass
+
+
+@admin_only
+async def adm_send_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    pass
 
 
 async def _send_user_card(update: Update, context: ContextTypes.DEFAULT_TYPE, uid2: str, u: dict):
-    """Детальна картка користувача з повним функціоналом керування."""
     orders = await async_load(ORDERS_KEY, {})
     user_orders = [o for o in orders.values() if o.get("user_id") == uid2]
     
@@ -2991,9 +2354,86 @@ async def _send_user_card(update: Update, context: ContextTypes.DEFAULT_TYPE, ui
         await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
 
 
+# ── Admin User Management Handlers (Extended) ──────────────────────────────────
+
+USERS_PER_PAGE = 10
+
+@admin_only
+async def adm_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    page = 1
+    if q and q.data and ":" in q.data:
+        try:
+            page = int(q.data.split(":")[1])
+        except ValueError:
+            page = 1
+
+    users = await async_load(USERS_KEY, {})
+    sorted_u = sorted(users.items(), key=lambda x: x[1].get("joined_date", ""), reverse=True)
+    
+    total_users = len(sorted_u)
+    total_pages = max(1, (total_users + USERS_PER_PAGE - 1) // USERS_PER_PAGE)
+    page = max(1, min(page, total_pages))
+
+    start_idx = (page - 1) * USERS_PER_PAGE
+    end_idx = start_idx + USERS_PER_PAGE
+    page_users = sorted_u[start_idx:end_idx]
+
+    text = f"👥 <b>УПРАВЛІННЯ КОРИСТУВАЧАМИ</b> (Стор. {page}/{total_pages})\n"
+    text += f"────────────────────────────\n"
+    text += f"📊 Всього у базі: <b>{total_users}</b>\n\n"
+
+    for uid2, u in page_users:
+        badges = ("👑 " if u.get("vip") else "") + ("🚫 " if u.get("banned") else "") + ("💰 " if u.get("has_bought") else "🆕 ")
+        fname = esc(u.get('first_name', 'Користувач'))
+        uname = f"@{esc(u.get('username'))}" if u.get('username') else "без username"
+        
+        text += f"{badges}<b>{fname}</b> ({uname})\n"
+        text += f"└ 🆔 <code>{uid2}</code> | 💳 {u.get('balance', 0)}₴ | 👥 {u.get('ref_count', 0)}\n\n"
+
+    kb_rows = []
+    
+    nav_btns = []
+    if page > 1:
+        nav_btns.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"adm:users:{page - 1}"))
+    nav_btns.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop"))
+    if page < total_pages:
+        nav_btns.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"adm:users:{page + 1}"))
+    kb_rows.append(nav_btns)
+
+    kb_rows.append([
+        InlineKeyboardButton("🔍 Пошук", callback_data="adm:search"),
+        InlineKeyboardButton("💰 Змінити баланс", callback_data="adm:balance")
+    ])
+    kb_rows.append(back_btn("admin_panel"))
+
+    await safe_edit(q, text, InlineKeyboardMarkup(kb_rows))
+
+
+@admin_only
+async def adm_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["state"] = AWAIT_USER_SEARCH
+    await safe_edit(
+        update.callback_query,
+        "🔍 <b>ПОШУК КОРИСТУВАЧА</b>\n────────────────────────────\n"
+        "Введіть @username, Telegram ID або ПІБ для пошуку:",
+        mkb(back_btn("admin_panel"))
+    )
+
+
+@admin_only
+async def adm_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["state"] = AWAIT_BALANCE_UID
+    await safe_edit(
+        update.callback_query,
+        "💰 <b>ЗМІНА БАЛАНСУ</b>\n────────────────────────────\n"
+        "Введіть Telegram ID користувача:",
+        mkb(back_btn("admin_panel"))
+    )
+
+
 @admin_only
 async def adm_direct_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Прямий перехід до зміни балансу з картки користувача."""
     q = update.callback_query
     parts = q.data.split(":")
     if len(parts) < 2: return
@@ -3079,7 +2519,6 @@ async def adm_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def adm_confirm_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Підтвердження виводу реферальних коштів адміністратором."""
     q = update.callback_query
     parts = q.data.split(":")
     if len(parts) < 3: return
@@ -3106,7 +2545,6 @@ async def adm_confirm_withdraw(update: Update, context: ContextTypes.DEFAULT_TYP
 
 @admin_only
 async def adm_reject_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Відхилення виводу коштів із можливістю повернення/збереження балансу."""
     q = update.callback_query
     parts = q.data.split(":")
     if len(parts) < 3: return
@@ -3173,7 +2611,6 @@ async def tariff_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def tariff_del_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Запит на підтвердження видалення тарифу."""
     q = update.callback_query
     parts = q.data.split(":")
     if len(parts) < 2: return
@@ -3199,7 +2636,6 @@ async def tariff_del_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @admin_only
 async def tariff_del_do(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Остаточне видалення тарифу."""
     q = update.callback_query
     parts = q.data.split(":")
     if len(parts) > 1:
@@ -3329,7 +2765,6 @@ async def promo_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def promo_stat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Детальна статистика використання конкретного промокоду."""
     q = update.callback_query
     parts = q.data.split(":")
     if len(parts) < 2: return
@@ -3473,7 +2908,6 @@ async def adm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def cast_select_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обробка вибору готового шаблону розсилки."""
     q = update.callback_query
     parts = q.data.split(":")
     if len(parts) < 2: return
@@ -3490,7 +2924,6 @@ async def cast_select_template(update: Update, context: ContextTypes.DEFAULT_TYP
     users = await async_load(USERS_KEY, {})
     active_users = sum(1 for u in users.values() if not u.get("banned"))
 
-    # Показ попереднього перегляду із заповненими тегами
     sample_text = tmpl["text"].format(first_name=q.from_user.first_name or "Користувач", user_id=q.from_user.id)
 
     preview_text = (
@@ -3526,7 +2959,6 @@ async def cast_custom(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def cast_custom_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Редагування обраного шаблону."""
     q = update.callback_query
     curr_text = context.user_data.get("broadcast_text", "")
     context.user_data["state"] = AWAIT_BROADCAST
@@ -3560,7 +2992,6 @@ async def broadcast_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
             continue
 
         fname = u.get("first_name", "Клієнт")
-        # Форматування під конкретного користувача
         formatted_text = raw_text.format(first_name=esc(fname), user_id=uid2)
 
         try:
@@ -3572,7 +3003,6 @@ async def broadcast_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning("Broadcast failed for %s: %s", uid2, e)
             failed += 1
 
-        # Захист від Rate Limit Telegram (30 повідомлень на секунду max)
         if idx % 20 == 0:
             await asyncio.sleep(1.0)
 
@@ -3634,7 +3064,6 @@ async def reply_fb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("❌ Відгук не знайдено", show_alert=True)
         return
 
-    # Позначаємо як прочитаний
     feedbacks[fid]["status"] = "read"
     await async_save(FEEDBACK_KEY, feedbacks)
 
@@ -3883,7 +3312,6 @@ async def adm_export_do(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── Other Callbacks (Extended) ──────────────────────────────────────────────────
 
 async def promo_enter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Перехід до режиму введення промо-коду під час оформлення замовлення."""
     q = update.callback_query
     context.user_data["state"] = AWAIT_PROMO_CODE
     await safe_edit(
@@ -3895,7 +3323,6 @@ async def promo_enter(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def ref_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Розширена реферальна програма з детальною статистикою."""
     q = update.callback_query
     uid = str(q.from_user.id)
     users = await async_load(USERS_KEY, {})
@@ -3927,7 +3354,6 @@ async def ref_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def withdraw_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обробка запиту на вивід реферальних коштів."""
     q = update.callback_query
     uid = str(q.from_user.id)
     users = await async_load(USERS_KEY, {})
@@ -3945,7 +3371,6 @@ async def withdraw_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Відправляємо сповіщення усім адмінам з кнопками обробки
     fname = esc(q.from_user.first_name or "Користувач")
     uname = f"@{q.from_user.username}" if q.from_user.username else "без username"
 
@@ -3980,7 +3405,6 @@ async def withdraw_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def feedback_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Меню зворотного зв'язку та чату підтримки."""
     context.user_data["state"] = AWAIT_FEEDBACK
     await safe_edit(
         update.callback_query,
@@ -3993,7 +3417,6 @@ async def feedback_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def about_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Інформація про сервіс та інструкція."""
     s = await load_settings()
     card = esc(s.get('payment_card', 'За запитом'))
     holder = esc(s.get('payment_holder', 'FunsDiia Service'))
@@ -4016,7 +3439,6 @@ async def about_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── Global Router (Extended & Hardened) ─────────────────────────────────────────
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Центральний маршрутизатор усіх CallbackQuery оновлень бота."""
     q = update.callback_query
     d = q.data
     uid = str(q.from_user.id)
@@ -4026,7 +3448,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-    # Перевірка на заблокованого користувача
     users = await async_load(USERS_KEY, {})
     if users.get(uid, {}).get("banned") and not is_admin(uid):
         try:
@@ -4036,7 +3457,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        # Точні стататичні маршрути
         routes = {
             "home":                 cmd_start,
             "catalog":              show_catalog,
@@ -4085,7 +3505,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if d in routes:
             return await routes[d](update, context)
 
-        # Динамічні префіксні маршрути
         if d.startswith("p_toggle:"):          return await profile_toggle_field(update, context)
         if d.startswith("p_edit:"):            return await profile_input_prompt(update, context)
         if d.startswith("user_ord_view:"):    return await user_ord_view(update, context)
@@ -4096,7 +3515,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if d.startswith("zagran:"):            return await select_zagran(update, context)
         if d.startswith("diploma:"):           return await select_diploma(update, context)
 
-        # Адмінські динамічні маршрути
         if d.startswith("adm:users:"):         return await adm_users(update, context)
         if d.startswith("adm_user_card:"):     
             parts = d.split(":")
@@ -4115,7 +3533,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if d.startswith("adm_order_view:"):    return await adm_order_view(update, context)
         if d.startswith("adm_order_filter:"):  return await adm_order_filter(update, context)
 
-        # Управління тарифами
         if d.startswith("tariff_toggle:"):     return await tariff_toggle(update, context)
         if d.startswith("tariff_edit:"):       return await tariff_edit(update, context)
         if d.startswith("tariff_del_confirm:"):return await tariff_del_confirm(update, context)
@@ -4124,7 +3541,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if d.startswith("tedit_price:"):       return await tedit_price(update, context)
         if d.startswith("tedit_emoji:"):       return await tedit_emoji(update, context)
 
-        # Промокоди та фідбек
         if d.startswith("promo_toggle:"):      return await promo_toggle(update, context)
         if d.startswith("promo_stat:"):        return await promo_stat(update, context)
         if d.startswith("promo_del_confirm:"): return await promo_del_confirm(update, context)
@@ -4149,7 +3565,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── Additional Admin Commands (Extended) ───────────────────────────────────────
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /admin для швидкого виклику адмін-панелі."""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("❌ У вас немає прав доступу до адміністративної панелі.")
         return
@@ -4180,7 +3595,6 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_deploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Прямий виклик повного ланцюжка деплою через /deploy."""
     if not is_admin(update.effective_user.id):
         return
 
@@ -4204,7 +3618,6 @@ async def cmd_deploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Швидкий виклик вивантаження БД через /export."""
     if not is_admin(update.effective_user.id):
         return
         
@@ -4220,7 +3633,6 @@ async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /ban <user_id>."""
     if not is_admin(update.effective_user.id):
         return
     if not context.args:
@@ -4240,7 +3652,6 @@ async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /unban <user_id>."""
     if not is_admin(update.effective_user.id):
         return
     if not context.args:
@@ -4260,7 +3671,6 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /balance <user_id> <amount>."""
     if not is_admin(update.effective_user.id):
         return
     if len(context.args) < 2:
@@ -4288,7 +3698,6 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Глобальний обробник помилок бота з інформуванням адміністраторів."""
     logger.error("Global Error Caught: %s", context.error, exc_info=True)
     
     error_msg = (
@@ -4305,12 +3714,8 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    """Головна точка запуску Telegram-бота FunsDiia."""
-    
-    # 1. Створення необхідних директорій
     os.makedirs(ORDER_PHOTOS_DIR, exist_ok=True)
 
-    # 2. Ініціалізація бази даних та маппінг джерел
     _db.init_db()
     logger.info("✅ Базу даних ініціалізовано успішно.")
 
@@ -4323,7 +3728,6 @@ def main():
         SETTINGS_KEY: {"load": _db.load_settings_db, "save": _db.save_settings_db},
     })
 
-    # 3. Перевірка змінних оточення
     if not PAGES_GH_TOKEN:
         logger.warning("⚠️ PAGES_GH_TOKEN не встановлено у змінних оточення!")
     if not os.getenv("GH_TOKEN_2"):
@@ -4331,10 +3735,8 @@ def main():
     if not GROUP_CHAT_ID:
         logger.warning("⚠️ GROUP_CHAT_ID не встановлено у змінних оточення!")
 
-    # 4. Ініціалізація додатка
     app = Application.builder().token(TOKEN).build()
 
-    # 5. Фонова задача перевірки підписок
     if app.job_queue:
         app.job_queue.run_repeating(
             subscription_check_job,
@@ -4343,7 +3745,6 @@ def main():
             name="subscription_check",
         )
 
-    # 6. Команди бота
     app.add_handler(CommandHandler("start",   cmd_start))
     app.add_handler(CommandHandler("help",    cmd_start))
     app.add_handler(CommandHandler("admin",   cmd_admin))
@@ -4353,22 +3754,18 @@ def main():
     app.add_handler(CommandHandler("unban",   cmd_unban))
     app.add_handler(CommandHandler("balance", cmd_balance))
 
-    # 7. Адміністративні хендлери (Reply & Медіа від адміна)
     admin_filter = filters.User(user_id=ADMIN_IDS)
 
-    # Відповідь адміна через Reply на переслане повідомлення
     app.add_handler(MessageHandler(
         admin_filter & filters.REPLY & filters.TEXT & ~filters.COMMAND,
         _handle_admin_reply_msg
     ))
 
-    # Відправка виконаних файлів/документів від адміна
     app.add_handler(MessageHandler(
         admin_filter & (filters.Document.ALL | filters.PHOTO | filters.VIDEO | filters.AUDIO),
         _process_complete_order_files
     ))
 
-    # 8. Адміністративні CallbackQuery (кнопки керування)
     app.add_handler(CallbackQueryHandler(adm_users, pattern=r"^adm:users"))
     app.add_handler(CallbackQueryHandler(adm_search, pattern=r"^adm:search$"))
     app.add_handler(CallbackQueryHandler(adm_balance, pattern=r"^adm:balance$"))
@@ -4379,19 +3776,15 @@ def main():
     app.add_handler(CallbackQueryHandler(adm_confirm_withdraw, pattern=r"^adm_confirm_withdraw:"))
     app.add_handler(CallbackQueryHandler(adm_reject_withdraw, pattern=r"^adm_reject_withdraw:"))
 
-    # 9. Глобальний обробник CallbackQuery (для клієнтських кнопок та меню адмінки)
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    # 10. Обробники повідомлень та медіа від користувачів
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL | filters.VIDEO, handle_media))
 
-    # 11. Обробка помилок
     app.add_error_handler(error_handler)
 
     logger.info("🌸 FunsDiia Bot успішно запущено! Адміни: %s | Група: %s", ADMIN_IDS, GROUP_CHAT_ID)
 
-    # 12. Запуск long-polling
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
