@@ -4,27 +4,59 @@ db.py — Firebase Cloud Firestore database layer for FunsDiia Bot
 Replaces SQLite Cloud / JSON file storage with Google Cloud Firestore.
 All public functions mirror the old API so bot.py requires minimal changes.
 
-Credentials are read from env: FIREBASE_SERVICE_ACCOUNT (JSON string)
+Credentials read from:
+ - FIREBASE_SERVICE_ACCOUNT (JSON string) OR
+ - FIREBASE_SERVICE_ACCOUNT_FILE (path to json file)
 """
 
 import json
 import logging
 import os
 import threading
-from typing import Any
+import time
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Optional, Tuple, Generator
 
 import firebase_admin
 from firebase_admin import credentials, firestore
 
 logger = logging.getLogger(__name__)
 
-# ── Initialization ────────────────────────────────────────────────────────────
-_db_client = None
+# ── Initialization & Threading ───────────────────────────────────────────────
+_db_client: Optional[firestore.Client] = None
 _init_lock = threading.Lock()
+_executor = ThreadPoolExecutor(max_workers=4)
 
+# ── Simple In-Memory Cache for Heavy-Read / Low-Write Collections ───────────
+_CACHE_TTL = 60  # seconds
+_cache_store: Dict[str, Tuple[float, Any]] = {}
+_cache_lock = threading.Lock()
+
+
+def _get_cached(key: str) -> Optional[Any]:
+    with _cache_lock:
+        if key in _cache_store:
+            timestamp, data = _cache_store[key]
+            if time.time() - timestamp < _CACHE_TTL:
+                return data
+            del _cache_store[key]
+    return None
+
+
+def _set_cached(key: str, data: Any) -> None:
+    with _cache_lock:
+        _cache_store[key] = (time.time(), data)
+
+
+def _invalidate_cache(key: str) -> None:
+    with _cache_lock:
+        _cache_store.pop(key, None)
+
+
+# ── Database Connection Initialization ───────────────────────────────────────
 
 def _get_db() -> firestore.Client:
-    """Return an initialized Firestore client."""
+    """Return an initialized Firestore client (Thread-safe Singleton)."""
     global _db_client
     if _db_client is not None:
         return _db_client
@@ -32,18 +64,23 @@ def _get_db() -> firestore.Client:
     with _init_lock:
         if _db_client is None:
             if not firebase_admin._apps:
-                service_account_env = os.getenv("FIREBASE_SERVICE_ACCOUNT", "")
-                if not service_account_env:
-                    raise RuntimeError(
-                        "FIREBASE_SERVICE_ACCOUNT env var is missing or empty. "
-                        "Pass the raw JSON key string."
-                    )
+                service_account_env = os.getenv("FIREBASE_SERVICE_ACCOUNT", "").strip()
+                service_account_file = os.getenv("FIREBASE_SERVICE_ACCOUNT_FILE", "").strip()
+
                 try:
-                    cred_dict = json.loads(service_account_env)
-                    cred = credentials.Certificate(cred_dict)
+                    if service_account_env:
+                        cred_dict = json.loads(service_account_env)
+                        cred = credentials.Certificate(cred_dict)
+                    elif service_account_file and os.path.exists(service_account_file):
+                        cred = credentials.Certificate(service_account_file)
+                    else:
+                        raise RuntimeError(
+                            "Neither FIREBASE_SERVICE_ACCOUNT nor valid FIREBASE_SERVICE_ACCOUNT_FILE found."
+                        )
+
                     firebase_admin.initialize_app(cred)
                 except Exception as e:
-                    logger.error("Failed to parse FIREBASE_SERVICE_ACCOUNT JSON: %s", e)
+                    logger.error("❌ Failed to initialize Firebase Admin SDK: %s", e)
                     raise
 
             _db_client = firestore.client()
@@ -52,12 +89,20 @@ def _get_db() -> firestore.Client:
 
 
 def init_db() -> None:
-    """Initialize connection to Firebase. Replaces SQLite schema setup."""
+    """Initialize connection to Firebase."""
     try:
         _get_db()
     except Exception as e:
         logger.error("❌ DB init error: %s", e)
         raise
+
+
+# ── Batch Helper ──────────────────────────────────────────────────────────────
+
+def _chunked(iterable: List[Any], size: int = 400) -> Generator[List[Any], None, None]:
+    """Yield successive chunks from iterable to strictly stay under 500 batch limit."""
+    for i in range(0, len(iterable), size):
+        yield iterable[i : i + size]
 
 
 # ── Generic collection helpers ────────────────────────────────────────────────
@@ -76,40 +121,37 @@ def _collection_load(collection_name: str, default: Any = None) -> dict:
 
 
 def _collection_save(collection_name: str, records: dict) -> bool:
-    """Overwrites collection with records. Deletes removed records and sets updated ones."""
+    """
+    Overwrites collection with records using chunked batches.
+    Deletes removed records and sets updated ones safely.
+    """
     try:
         db = _get_db()
         coll_ref = db.collection(collection_name)
 
-        # 1. Get existing doc IDs to delete missing ones
+        # 1. Fetch current IDs
         existing_docs = {doc.id for doc in coll_ref.select([]).stream()}
-        new_ids = set(records.keys())
+        new_ids = set(str(k) for k in records.keys())
 
-        batch = db.batch()
-        batch_counter = 0
-
-        # Delete docs not present in records
-        for doc_id in existing_docs - new_ids:
-            batch.delete(coll_ref.document(str(doc_id)))
-            batch_counter += 1
-            if batch_counter >= 400:
-                batch.commit()
-                batch = db.batch()
-                batch_counter = 0
-
-        # Set / Update current records
-        for rec_id, data in records.items():
-            doc_ref = coll_ref.document(str(rec_id))
-            batch.set(doc_ref, data if isinstance(data, dict) else {"value": data})
-            batch_counter += 1
-            if batch_counter >= 400:
-                batch.commit()
-                batch = db.batch()
-                batch_counter = 0
-
-        if batch_counter > 0:
+        # 2. Process deletions in safe batches
+        to_delete = list(existing_docs - new_ids)
+        for chunk in _chunked(to_delete, 400):
+            batch = db.batch()
+            for doc_id in chunk:
+                batch.delete(coll_ref.document(str(doc_id)))
             batch.commit()
 
+        # 3. Process sets/updates in safe batches
+        to_set = list(records.items())
+        for chunk in _chunked(to_set, 400):
+            batch = db.batch()
+            for rec_id, data in chunk:
+                doc_ref = coll_ref.document(str(rec_id))
+                payload = data if isinstance(data, dict) else {"value": data}
+                batch.set(doc_ref, payload)
+            batch.commit()
+
+        _invalidate_cache(collection_name)
         return True
     except Exception as e:
         logger.error("DB save error [%s]: %s", collection_name, e)
@@ -120,9 +162,9 @@ def _doc_upsert_one(collection_name: str, doc_id: str, data: dict) -> bool:
     """Upsert a single document into a collection."""
     try:
         db = _get_db()
-        db.collection(collection_name).document(str(doc_id)).set(
-            data if isinstance(data, dict) else {"value": data}, merge=True
-        )
+        payload = data if isinstance(data, dict) else {"value": data}
+        db.collection(collection_name).document(str(doc_id)).set(payload, merge=True)
+        _invalidate_cache(collection_name)
         return True
     except Exception as e:
         logger.error("DB upsert error [%s/%s]: %s", collection_name, doc_id, e)
@@ -134,6 +176,7 @@ def _doc_delete_one(collection_name: str, doc_id: str) -> bool:
     try:
         db = _get_db()
         db.collection(collection_name).document(str(doc_id)).delete()
+        _invalidate_cache(collection_name)
         return True
     except Exception as e:
         logger.error("DB delete error [%s/%s]: %s", collection_name, doc_id, e)
@@ -168,6 +211,18 @@ def delete_user(uid: str) -> bool:
     return _doc_delete_one("users", str(uid))
 
 
+def update_user_balance(uid: str, amount_delta: float) -> bool:
+    """Атомарне оновлення балансу користувача (підтримує плюс та мінус)."""
+    try:
+        db = _get_db()
+        doc_ref = db.collection("users").document(str(uid))
+        doc_ref.update({"balance": firestore.Increment(amount_delta)})
+        return True
+    except Exception as e:
+        logger.error("update_user_balance error [%s]: %s", uid, e)
+        return False
+
+
 # ── ORDERS ────────────────────────────────────────────────────────────────────
 
 def load_orders() -> dict:
@@ -197,7 +252,6 @@ def delete_order(order_id: str) -> bool:
 
 
 def get_orders_by_user(uid: str) -> dict:
-    """Return all orders for a specific user_id using Firestore query."""
     try:
         db = _get_db()
         docs = db.collection("orders").where("user_id", "==", str(uid)).stream()
@@ -208,7 +262,6 @@ def get_orders_by_user(uid: str) -> dict:
 
 
 def get_orders_by_status(status: str) -> dict:
-    """Return all orders with a given status using Firestore query."""
     try:
         db = _get_db()
         docs = db.collection("orders").where("status", "==", status).stream()
@@ -232,30 +285,45 @@ def save_feedback_one(fid: str, data: dict) -> bool:
     return _doc_upsert_one("feedback", str(fid), data)
 
 
-# ── TARIFFS ───────────────────────────────────────────────────────────────────
+# ── TARIFFS (With Caching) ───────────────────────────────────────────────────
 
 def load_tariffs_db() -> dict:
-    return _collection_load("tariffs", {})
+    cached = _get_cached("tariffs")
+    if cached is not None:
+        return cached
+
+    data = _collection_load("tariffs", {})
+    _set_cached("tariffs", data)
+    return data
 
 
 def save_tariffs_db(tariffs: dict) -> bool:
     return _collection_save("tariffs", tariffs)
 
 
-# ── PROMOS ────────────────────────────────────────────────────────────────────
+# ── PROMOS (With Caching) ─────────────────────────────────────────────────────
 
 def load_promos_db() -> dict:
-    return _collection_load("promos", {})
+    cached = _get_cached("promos")
+    if cached is not None:
+        return cached
+
+    data = _collection_load("promos", {})
+    _set_cached("promos", data)
+    return data
 
 
 def save_promos_db(promos: dict) -> bool:
     return _collection_save("promos", promos)
 
 
-# ── SETTINGS ──────────────────────────────────────────────────────────────────
+# ── SETTINGS (With Caching) ───────────────────────────────────────────────────
 
 def load_settings_db() -> dict:
-    """Return all settings stored as separate documents or a unified map."""
+    cached = _get_cached("settings")
+    if cached is not None:
+        return cached
+
     try:
         db = _get_db()
         docs = db.collection("settings").stream()
@@ -263,6 +331,7 @@ def load_settings_db() -> dict:
         for doc in docs:
             d = doc.to_dict()
             res[doc.id] = d.get("value") if "value" in d and len(d) == 1 else d
+        _set_cached("settings", res)
         return res
     except Exception as e:
         logger.error("load_settings_db error: %s", e)
@@ -270,15 +339,17 @@ def load_settings_db() -> dict:
 
 
 def save_settings_db(settings: dict) -> bool:
-    """Upsert key/value settings."""
     try:
         db = _get_db()
-        batch = db.batch()
-        for key, val in settings.items():
-            doc_ref = db.collection("settings").document(str(key))
-            data = val if isinstance(val, dict) else {"value": val}
-            batch.set(doc_ref, data, merge=True)
-        batch.commit()
+        for chunk in _chunked(list(settings.items()), 400):
+            batch = db.batch()
+            for key, val in chunk:
+                doc_ref = db.collection("settings").document(str(key))
+                data = val if isinstance(val, dict) else {"value": val}
+                batch.set(doc_ref, data, merge=True)
+            batch.commit()
+
+        _invalidate_cache("settings")
         return True
     except Exception as e:
         logger.error("save_settings_db error: %s", e)
@@ -286,35 +357,22 @@ def save_settings_db(settings: dict) -> bool:
 
 
 def get_setting_db(key: str, default: Any = None) -> Any:
-    try:
-        db = _get_db()
-        doc = db.collection("settings").document(str(key)).get()
-        if not doc.exists:
-            return default
-        d = doc.to_dict()
-        return d.get("value") if "value" in d and len(d) == 1 else d
-    except Exception as e:
-        logger.error("get_setting_db error [%s]: %s", key, e)
-        return default
+    settings = load_settings_db()
+    return settings.get(str(key), default)
 
 
 def set_setting_db(key: str, value: Any) -> bool:
-    try:
-        db = _get_db()
-        data = value if isinstance(value, dict) else {"value": value}
-        db.collection("settings").document(str(key)).set(data, merge=True)
-        return True
-    except Exception as e:
-        logger.error("set_setting_db error [%s]: %s", key, e)
-        return False
+    res = _doc_upsert_one("settings", str(key), value)
+    _invalidate_cache("settings")
+    return res
 
 
-# ── ACTION LOGS ───────────────────────────────────────────────────────────────
+# ── ACTION LOGS (Async Logging Option) ────────────────────────────────────────
+
 _LOGS_MAX = 500
 
 
-def log_action_db(ts: str, action: str, uid: str = None, details: dict = None) -> None:
-    """Append action log document to Firestore."""
+def _async_log_task(ts: str, action: str, uid: Optional[str], details: dict) -> None:
     try:
         db = _get_db()
         log_entry = {
@@ -325,11 +383,16 @@ def log_action_db(ts: str, action: str, uid: str = None, details: dict = None) -
             "created_at": firestore.SERVER_TIMESTAMP,
         }
         db.collection("action_logs").add(log_entry)
-
-        # Basic pruning fallback if needed
-        # (Recommended: set up TTL Policy directly in Firebase Console for action_logs)
     except Exception as e:
-        logger.error("log_action_db error: %s", e)
+        logger.error("Async log_action_db error: %s", e)
+
+
+def log_action_db(ts: str, action: str, uid: str = None, details: dict = None, sync: bool = False) -> None:
+    """Append action log document to Firestore (Default: Non-blocking async thread execution)."""
+    if sync:
+        _async_log_task(ts, action, uid, details)
+    else:
+        _executor.submit(_async_log_task, ts, action, uid, details)
 
 
 def load_logs_db() -> list:
@@ -368,7 +431,7 @@ def migrate_json_to_db(
     settings_json: dict = None,
     logs_json: list = None,
 ) -> None:
-    """Import existing JSON data into Firestore."""
+    """Import existing JSON data into Firestore safely."""
     init_db()
     if users_json:
         save_users(users_json)
@@ -395,5 +458,6 @@ def migrate_json_to_db(
                 entry.get("action", ""),
                 entry.get("uid"),
                 entry.get("details", {}),
+                sync=True
             )
         logger.info("Migrated %d log entries.", len(logs_json))
