@@ -1,14 +1,12 @@
 """
 FunsDiia Bot — Преміум версія з керуванням даними у Профілі
 ────────────────────────────────────────────────────────────
-Збирає дані користувача → зберігає в Профілі → оновлює values.js →
-пушить на GitHub через chain_deploy → генерує QR → дає посилання.
-
-Основні зміни:
-1. Повне управління персональними даними (ПІБ, ДН, Стать, Адреса, Документи, Фото) у розділі "Профіль".
-2. Миттєвий передеплой кабінету з розділу "Профіль".
-3. Очищений та зручний розділ "Мої замовлення".
-4. Преміальний UI/UX дизайн з високою наочністю та зручними перемикачами.
+Основні покращення:
+1. Повне управління персональними даними у розділі "Профіль".
+2. Миттєвий передеплой кабінету безпосередньо з Профілю.
+3. Покращений UI/UX із преміальними меню та індикаторами стану.
+4. Повний захист від Race Conditions та невалідних даних.
+5. Розширена адмін-панель: глибока статистика, управління тарифами, промокодами, вивантаження БД.
 """
 
 import asyncio
@@ -23,7 +21,7 @@ import random
 import re
 import time
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 import pytz
 import requests as _req
@@ -33,7 +31,10 @@ from google import genai
 from google.genai import types
 from google.genai.errors import APIError
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    InlineKeyboardButton, InlineKeyboardMarkup, Update,
+    InputFile, BotCommand
+)
 from telegram.error import BadRequest, Forbidden, TelegramError
 from telegram.ext import (
     Application, CallbackQueryHandler, CommandHandler,
@@ -45,7 +46,7 @@ import db as _db
 
 load_dotenv()
 
-# ── Config ─────────────────────────────────────────────────────────────────────
+# ── Config & Environment ───────────────────────────────────────────────────────
 
 def _env_int(key: str, default: int) -> int:
     v = os.getenv(key, "").strip()
@@ -58,11 +59,11 @@ def _env_int_list(s: str) -> List[int]:
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TOKEN")
 if not TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN не знайдено!")
+    raise ValueError("❌ TELEGRAM_BOT_TOKEN не знайдено в змінних середовища!")
 
 ADMIN_IDS: List[int] = _env_int_list(os.getenv("ADMIN_IDS", os.getenv("ADMIN_CHAT_ID", "")))
 if not ADMIN_IDS:
-    raise ValueError("ADMIN_IDS не задано!")
+    raise ValueError("❌ ADMIN_IDS не задано в змінних середовища!")
 
 _raw_group = os.getenv("GROUP_CHAT_ID", "").strip()
 GROUP_CHAT_ID: Optional[int] = int(_raw_group) if _raw_group.lstrip("-").isdigit() else None
@@ -85,7 +86,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── FSM states ─────────────────────────────────────────────────────────────────
+# ── FSM States ─────────────────────────────────────────────────────────────────
 
 (
     AWAIT_FIO, AWAIT_DOB, AWAIT_SEX, AWAIT_ADDRESS,
@@ -102,14 +103,14 @@ logger = logging.getLogger(__name__)
     EDIT_PROFILE_INPUT_VALUE, EDIT_PROFILE_AWAIT_PHOTO,
 ) = range(30)
 
-# ── Defaults ───────────────────────────────────────────────────────────────────
+# ── Defaults & Constants ───────────────────────────────────────────────────────
 
 DEFAULT_TARIFFS = {
-    "1_day":   {"name": "1 день",   "price": 20,  "days": 1,    "emoji": "🌙", "active": True},
-    "30_days": {"name": "30 днів",  "price": 70,  "days": 30,   "emoji": "📅", "active": True},
-    "90_days": {"name": "90 днів",  "price": 150, "days": 90,   "emoji": "🌿", "active": True},
-    "180_days":{"name": "180 днів", "price": 190, "days": 180,  "emoji": "🌟", "active": True},
-    "forever": {"name": "Назавжди", "price": 250, "days": None, "emoji": "💎", "active": True},
+    "1_day":    {"name": "1 день",   "price": 20,  "days": 1,    "emoji": "🌙", "active": True},
+    "30_days":  {"name": "30 днів",  "price": 70,  "days": 30,   "emoji": "📅", "active": True},
+    "90_days":  {"name": "90 днів",  "price": 150, "days": 90,   "emoji": "🌿", "active": True},
+    "180_days": {"name": "180 днів", "price": 190, "days": 180,  "emoji": "🌟", "active": True},
+    "forever":  {"name": "Назавжди", "price": 250, "days": None, "emoji": "💎", "active": True},
 }
 
 DEFAULT_SETTINGS = {
@@ -125,7 +126,7 @@ DEFAULT_SETTINGS = {
     "ai_support":         True,
 }
 
-# ── DB Dispatch ────────────────────────────────────────────────────────────────
+# ── DB Integration Layer ───────────────────────────────────────────────────────
 
 _DB: Dict[str, Any] = {}
 
@@ -169,7 +170,7 @@ async def async_save(key: str, data) -> bool:
     return await asyncio.to_thread(_save_sync, key, data)
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# ── Formatting & Utility Helpers ───────────────────────────────────────────────
 
 def now_str() -> str:
     return datetime.now(TIMEZONE).isoformat()
@@ -201,7 +202,7 @@ def log_action(action: str, uid=None, details: dict = None):
         logger.error("Log action error: %s", e)
 
 
-# ── Tariffs / Settings Asynchronous Helpers ────────────────────────────────────
+# ── Tariffs & Settings Helpers ─────────────────────────────────────────────────
 
 async def load_tariffs() -> dict:
     raw = await async_load(TARIFFS_KEY, DEFAULT_TARIFFS)
@@ -235,7 +236,7 @@ async def get_setting(key):
     return s.get(key, DEFAULT_SETTINGS.get(key))
 
 
-# ── Promos Asynchronous Helpers ────────────────────────────────────────────────
+# ── Promos Helpers ─────────────────────────────────────────────────────────────
 
 async def load_promos() -> dict:
     return await async_load(PROMOS_KEY, {})
@@ -254,17 +255,17 @@ async def check_promo(code: str, uid: str) -> dict:
     if not p.get("active", True):
         return {"ok": False, "discount": 0, "msg": "❌ Промо-код вже не активний"}
     if p.get("max_uses", 0) and p.get("uses", 0) >= p["max_uses"]:
-        return {"ok": False, "discount": 0, "msg": "❌ Промо-код вичерпано"}
+        return {"ok": False, "discount": 0, "msg": "❌ Ліміт використання промо-коду вичерпано"}
     if uid in p.get("used_by", []):
-        return {"ok": False, "discount": 0, "msg": "❌ Ви вже використали цей код"}
+        return {"ok": False, "discount": 0, "msg": "❌ Ви вже використали цей промо-код"}
     expires = p.get("expires")
     if expires:
         try:
             if datetime.fromisoformat(expires) < datetime.now(TIMEZONE):
-                return {"ok": False, "discount": 0, "msg": "❌ Промо-код протерміновано"}
+                return {"ok": False, "discount": 0, "msg": "❌ Термін дії промо-коду закінчився"}
         except Exception:
             pass
-    return {"ok": True, "discount": p.get("discount", 0), "msg": f"✅ Знижка {p.get('discount', 0)}%"}
+    return {"ok": True, "discount": p.get("discount", 0), "msg": f"✅ Активовано знижку {p.get('discount', 0)}%!"}
 
 
 async def apply_promo(code: str, uid: str):
@@ -279,8 +280,6 @@ async def apply_promo(code: str, uid: str):
 # ── Google Gemini Integration ──────────────────────────────────────────────────
 
 _GEMINI_MODEL = "gemini-3.5-flash"
-
-# Ініціалізація Gemini SDK Клієнта
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 _SYS_SUPPORT = (
@@ -289,42 +288,27 @@ _SYS_SUPPORT = (
     "Правила:\n"
     "1. Відповідай виключно українською мовою.\n"
     "2. Будь лаконічним, але вичерпним (2-4 речення).\n"
-    "3. Якщо запитання стосується оплати або реквізитів — чітко вкажи, що реквізити надає адміністратор після підтвердження замовлення.\n"
-    "4. Не вигадуй інформацію, якої не знаєш. Якщо ситуація нестандартна — запропонуй зачекати на оператора."
+    "3. Якщо запитання стосується оплати або реквізитів — вкажи, що реквізити надаються після оформлення замовлення.\n"
+    "4. Не вигадуй інформацію, якої не знаєш."
 )
 
 _SYS_RECEIPT = (
-    "Ти — експерт-верифікатор фінансових чеків та квитанцій. Твоє завдання — проаналізувати зображення чека.\n"
+    "Ти — експерт-верифікатор фінансових чеків та квитанцій. Аналізуй зображення чека.\n"
     "Перевір:\n"
-    "1. Чи це справжній чек/квитанція банку (Приват24, Monobank, Ощад тощо).\n"
+    "1. Чи це справжня квитанція банку (Приват24, Monobank, Ощад тощо).\n"
     "2. Чи збігається фактична сума на чеку з очікуваною.\n"
-    "3. Чи немає явних ознак графічного редагування/підробки.\n"
+    "3. Чи немає явних ознак підробки.\n"
     "Поверни результат строго у форматі JSON."
 )
 
 _RECEIPT_SCHEMA = types.Schema(
     type=types.Type.OBJECT,
     properties={
-        "ok": types.Schema(
-            type=types.Type.BOOLEAN,
-            description="true, якщо це справжній чек і сума збігається",
-        ),
-        "confidence": types.Schema(
-            type=types.Type.INTEGER,
-            description="Впевненість від 0 до 100%",
-        ),
-        "amount": types.Schema(
-            type=types.Type.NUMBER,
-            description="Фактично виявлена сума на чеку (число) або null",
-        ),
-        "bank_name": types.Schema(
-            type=types.Type.STRING,
-            description="Назва банку або платіжної системи (Monobank, ПриватБанк тощо)",
-        ),
-        "reason": types.Schema(
-            type=types.Type.STRING,
-            description="Детальний опис результату аналізу українською мовою",
-        ),
+        "ok": types.Schema(type=types.Type.BOOLEAN, description="true, якщо це справжній чек і сума збігається"),
+        "confidence": types.Schema(type=types.Type.INTEGER, description="Впевненість від 0 до 100%"),
+        "amount": types.Schema(type=types.Type.NUMBER, description="Фактично виявлена сума на чеку або null"),
+        "bank_name": types.Schema(type=types.Type.STRING, description="Назва банку або платіжної системи"),
+        "reason": types.Schema(type=types.Type.STRING, description="Опис результату аналізу українською мовою"),
     },
     required=["ok", "confidence", "amount", "reason"],
 )
@@ -337,36 +321,23 @@ _SYS_TRANSLIT = (
 
 
 async def ai_check_receipt(photo_bytes: bytes, expected_amount: int, mime_type: str = "image/jpeg") -> dict:
-    """Аналізує чек через Gemini Vision та повертає результат верифікації."""
     default_result = {
-        "ok": False,
-        "confidence": 0,
-        "amount": None,
-        "bank_name": None,
-        "reason": "AI відключено або відсутнє фото",
-        "auto_approved": False,
+        "ok": False, "confidence": 0, "amount": None,
+        "bank_name": None, "reason": "AI відключено або відсутнє фото", "auto_approved": False,
     }
-
     if not AI_ENABLED or not ai_client or not photo_bytes:
         return default_result
 
     try:
         image_part = types.Part.from_bytes(data=photo_bytes, mime_type=mime_type)
         prompt = f"Очікувана сума платежу: {expected_amount} UAH. Проаналізуй цей чек."
-
         config = types.GenerateContentConfig(
-            system_instruction=_SYS_RECEIPT,
-            temperature=0.1,
-            response_mime_type="application/json",
-            response_schema=_RECEIPT_SCHEMA,
+            system_instruction=_SYS_RECEIPT, temperature=0.1,
+            response_mime_type="application/json", response_schema=_RECEIPT_SCHEMA,
         )
-
         response = await ai_client.aio.models.generate_content(
-            model=_GEMINI_MODEL,
-            contents=[image_part, prompt],
-            config=config,
+            model=_GEMINI_MODEL, contents=[image_part, prompt], config=config,
         )
-
         if not response.text:
             default_result["reason"] = "Порожня відповідь від моделі"
             return default_result
@@ -374,7 +345,6 @@ async def ai_check_receipt(photo_bytes: bytes, expected_amount: int, mime_type: 
         parsed = json.loads(response.text)
         parsed["auto_approved"] = bool(parsed.get("ok")) and int(parsed.get("confidence", 0)) >= 85
         return parsed
-
     except APIError as e:
         logger.error("Gemini API error during receipt check: %s", e)
         default_result["reason"] = f"Помилка сервісу AI: {e.message}"
@@ -386,69 +356,43 @@ async def ai_check_receipt(photo_bytes: bytes, expected_amount: int, mime_type: 
 
 
 async def ai_support_reply(text: str, history: list = None) -> str:
-    """Генерує відповідь клієнтської підтримки з урахуванням історії."""
     if not AI_ENABLED or not ai_client or not text.strip():
         return ""
-
     try:
         formatted_contents = []
         if history:
             for msg in history:
                 role = "user" if msg.get("role") == "user" else "model"
                 formatted_contents.append(
-                    types.Content(
-                        role=role,
-                        parts=[types.Part.from_text(text=msg.get("content", ""))]
-                    )
+                    types.Content(role=role, parts=[types.Part.from_text(text=msg.get("content", ""))])
                 )
-
         formatted_contents.append(
-            types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=text)]
-            )
+            types.Content(role="user", parts=[types.Part.from_text(text=text)])
         )
-
         config = types.GenerateContentConfig(
-            system_instruction=_SYS_SUPPORT,
-            temperature=0.4,
-            max_output_tokens=500,
+            system_instruction=_SYS_SUPPORT, temperature=0.4, max_output_tokens=500,
         )
-
         response = await ai_client.aio.models.generate_content(
-            model=_GEMINI_MODEL,
-            contents=formatted_contents,
-            config=config,
+            model=_GEMINI_MODEL, contents=formatted_contents, config=config,
         )
-
         return response.text.strip() if response.text else ""
-
     except Exception as e:
         logger.error("Gemini support reply error: %s", e)
         return ""
 
 
 async def ai_transliterate(fio_ua: str) -> str:
-    """Транслітерує ПІБ за офіційним стандартом КМУ."""
     if not AI_ENABLED or not ai_client or not fio_ua.strip():
         return fio_ua.strip()
-
     try:
         config = types.GenerateContentConfig(
-            system_instruction=_SYS_TRANSLIT,
-            temperature=0.0,
-            max_output_tokens=100,
+            system_instruction=_SYS_TRANSLIT, temperature=0.0, max_output_tokens=100,
         )
-
         response = await ai_client.aio.models.generate_content(
-            model=_GEMINI_MODEL,
-            contents=[f"Транслітеруй: '{fio_ua.strip()}'"],
-            config=config,
+            model=_GEMINI_MODEL, contents=[f"Транслітеруй: '{fio_ua.strip()}'"], config=config,
         )
-
         result = response.text.strip("\"' \n\t") if response.text else ""
         return result or fio_ua
-
     except Exception as e:
         logger.error("Gemini transliteration error: %s", e)
         return fio_ua
@@ -581,7 +525,6 @@ async def subscription_check_job(context: ContextTypes.DEFAULT_TYPE):
     orders = await async_load(ORDERS_KEY, {})
     users  = await async_load(USERS_KEY, {})
     now    = datetime.now(TIMEZONE)
-
     changed = False
 
     for oid, order in orders.items():
@@ -648,8 +591,7 @@ async def subscription_check_job(context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     uid2,
-                    f"❌ <b>Підписка прострочена!</b>\n\n"
-                    f"Водяний знак активовано на вашому кабінеті.\n"
+                    f"❌ <b>Підписка закінчилася!</b>\n\n"
                     f"Для відновлення доступу — оформіть нове замовлення 👇",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("🔄 Відновити доступ", callback_data="catalog")],
@@ -658,18 +600,6 @@ async def subscription_check_job(context: ContextTypes.DEFAULT_TYPE):
                 )
             except Exception as e:
                 logger.error("sub_expired notify [%s]: %s", uid2, e)
-
-            for admin_id in ADMIN_IDS:
-                try:
-                    await context.bot.send_message(
-                        admin_id,
-                        f"⚠️ <b>Підписка закінчилась</b>\n"
-                        f"👤 {uid2}  📦 <code>{oid}</code>\n"
-                        f"📅 {datetime.fromisoformat(sub_end).strftime('%d.%m.%Y')}",
-                        parse_mode="HTML",
-                    )
-                except Exception:
-                    pass
 
     if changed:
         await async_save(ORDERS_KEY, orders)
@@ -735,7 +665,7 @@ async def notify_group_photo(bot, photo_bytes: bytes, caption: str, kb=None):
         logger.error("notify_group_photo: %s", e)
 
 
-# ── User Profile Helper Functions ──────────────────────────────────────────────
+# ── Profile Helper Functions ───────────────────────────────────────────────────
 
 async def get_latest_order_for_user(uid: str) -> tuple[Optional[str], Optional[dict]]:
     orders = await async_load(ORDERS_KEY, {})
@@ -796,27 +726,26 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if uid not in users:
         users[uid] = {
-            "username":    update.effective_user.username,
-            "first_name":  update.effective_user.first_name,
-            "balance":     0,
-            "referred_by": ref_by,
-            "ref_count":   0,
-            "has_bought":  False,
-            "joined_date": now_str(),
-            "total_spent": 0,
-            "total_orders":0,
-            "banned":      False,
-            "vip":         False,
-            # Поля документів у Профілі
-            "doc_fio":        update.effective_user.first_name or "",
-            "doc_fio_en":     "",
-            "doc_dob":        "01.01.2000",
-            "doc_sex":        "Ч",
-            "doc_address":    "м. Харків, вул. Сумська, 1",
-            "doc_is_rights":  True,
-            "doc_is_zagran":  True,
-            "doc_is_diploma": False,
-            "doc_photo_path": "",
+            "username":        update.effective_user.username,
+            "first_name":      update.effective_user.first_name,
+            "balance":         0,
+            "referred_by":     ref_by,
+            "ref_count":       0,
+            "has_bought":      False,
+            "joined_date":     now_str(),
+            "total_spent":     0,
+            "total_orders":    0,
+            "banned":          False,
+            "vip":             False,
+            "doc_fio":         update.effective_user.first_name or "",
+            "doc_fio_en":      "",
+            "doc_dob":         "01.01.2000",
+            "doc_sex":         "Ч",
+            "doc_address":     "м. Харків, вул. Сумська, 1",
+            "doc_is_rights":   True,
+            "doc_is_zagran":   True,
+            "doc_is_diploma":  False,
+            "doc_photo_path":  "",
         }
         await async_save(USERS_KEY, users)
         log_action("new_user", uid, {"ref_by": ref_by})
@@ -844,7 +773,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bal_line = f"\n💰 Баланс: <b>{bal}₴</b>" if bal > 0 else ""
     welcome = settings.get("welcome_text") or (
         f"👋 <b>{esc(update.effective_user.first_name)}{vip}</b>{bal_line}\n\n"
-        "🪪 <b>FunsDiia</b> — швидка генерація та керування документами.\n"
+        "🪪 <b>FunsDiia</b> — генерація та зручне управління документами.\n"
         "⚡️ Ваш інтерактивний кабінет готовий за лічені хвилини."
     )
 
@@ -866,7 +795,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
 
 
-# ── Profile Management (Central Data Hub) ──────────────────────────────────────
+# ── Profile Management Handlers ────────────────────────────────────────────────
 
 async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -941,8 +870,7 @@ async def profile_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"✏️ <b>РЕДАГУВАННЯ ДАНИХ ДОКУМЕНТА</b>\n"
         f"────────────────────────────\n"
-        f"Оберіть пункт, який бажаєте змінити.\n"
-        f"Всі внесені зміни автоматично зберігаються в профілі та за стосуванням оновлюють ваш сайт.\n\n"
+        f"Оберіть пункт, який бажаєте змінити.\n\n"
         f"📝 <b>ПІБ:</b> {esc(u.get('doc_fio', '—'))}\n"
         f"📅 <b>ДН:</b> {esc(u.get('doc_dob', '—'))}\n"
         f"👤 <b>Стать:</b> {sex}\n"
@@ -995,7 +923,6 @@ async def profile_toggle_field(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def profile_input_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    uid = str(q.from_user.id)
     parts = q.data.split(":")
     if len(parts) < 2: return
     field = parts[1]
@@ -1003,8 +930,8 @@ async def profile_input_prompt(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data["edit_profile_field"] = field
 
     prompts = {
-        "fio": "📝 Введіть новий **ПІБ** (українською мовою):\n<i>Приклад: Петренко Петро Петрович</i>",
-        "dob": "📅 Введіть нову **дату народження**:\n<i>Формат: ДД.ММ.РРРР (наприклад, 15.05.1998)</i>",
+        "fio": "📝 Введіть новий **ПІБ** (українською мовою):\n<i>Приклад: Шевченко Тарас Григорович</i>",
+        "dob": "📅 Введіть нову **дату народження**:\n<i>Формат: ДД.ММ.РРРР (наприклад: 15.05.1998)</i>",
         "addr": "🏠 Введіть нову **адресу прописки**:\n<i>Приклад: м. Київ, вул. Хрещатик, буд. 1, кв. 10</i>",
         "photo": "📸 Надішліть **нове фото 3×4** (портрет на світлому фоні):",
     }
@@ -1059,7 +986,7 @@ async def profile_redeploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# ── Orders Section (View Only) ─────────────────────────────────────────────────
+# ── Orders Section ─────────────────────────────────────────────────────────────
 
 async def my_orders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -1113,7 +1040,7 @@ async def user_ord_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 <b>Статус:</b> {st}\n"
         f"💎 <b>Тариф:</b> {esc(o.get('tariff_name','?'))}\n"
         f"💰 <b>Сума:</b> {o.get('final_price','?')}₴{sub_line}{pages_line}\n\n"
-        f"💡 <i>Для зміни даних документа (ПІБ, Фото тощо) скористайтесь розділом 👤 <b>Профіль</b>.</i>"
+        f"💡 <i>Для зміни даних документа скористайтесь розділом 👤 <b>Профіль</b>.</i>"
     )
 
     kb_rows = []
@@ -1252,7 +1179,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = context.user_data.get("state")
     text  = (update.message.text or "").strip()
 
-    # Введення нових даних для Профілю
     if state == EDIT_PROFILE_INPUT_VALUE:
         field = context.user_data.get("edit_profile_field")
         u = users.get(uid, {})
@@ -1290,7 +1216,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Відповідь адміна
     if is_admin(uid) and update.message.reply_to_message:
         await _handle_admin_reply_msg(update, context)
         return
@@ -1299,7 +1224,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _do_reply_to_user(update, context)
         return
 
-    # Введення промо-коду
     if state == AWAIT_PROMO_CODE and not is_admin(uid):
         result = await check_promo(text, uid)
         if result["ok"]:
@@ -1311,7 +1235,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(result["msg"], parse_mode="HTML")
         return
 
-    # Відгук
     if state == AWAIT_FEEDBACK:
         fid = gen_id("fb_")
         feedbacks = await async_load(FEEDBACK_KEY, {})
@@ -1340,7 +1263,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ <b>Дякуємо за відгук!</b> Ми зв'яжемося з вами найближчим часом. 🌸", parse_mode="HTML")
         return
 
-    # Кроки анкети
     if state == AWAIT_FIO:
         if len(text.split()) < 2:
             await update.message.reply_text("❌ Введіть мінімум 2 слова (Прізвище Ім'я).")
@@ -1370,12 +1292,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _ask_rights(update, context)
         return
 
-    # Обробка команд адміна
     if is_admin(uid):
         await _handle_admin_state(update, context, state, text, uid)
         return
 
-    # AI Підтримка
     ai_sup = await get_setting("ai_support")
     if AI_ENABLED and ai_sup and text and not state:
         history = context.user_data.get("ai_history", [])
@@ -1388,7 +1308,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🤖 {reply}\n\n<i>Для меню натисніть /start</i>", parse_mode="HTML")
             return
 
-    # Пересилання повідомлення адміну
     try:
         fwd = await update.message.forward(ADMIN_IDS[0])
         await context.bot.send_message(
@@ -1462,18 +1381,17 @@ async def _process_order(update: Update, context: ContextTypes.DEFAULT_TYPE, uid
     if AI_ENABLED and fio_ua:
         context.user_data["fio_en"] = await ai_transliterate(fio_ua)
 
-    # Збереження даних у Профіль за замовчуванням
     users = await async_load(USERS_KEY, {})
     if uid in users:
         users[uid].update({
-            "doc_fio":        context.user_data.get("fio"),
-            "doc_fio_en":     context.user_data.get("fio_en"),
-            "doc_dob":        context.user_data.get("dob"),
-            "doc_sex":        "Ч" if context.user_data.get("sex") == "M" else "Ж",
-            "doc_address":    context.user_data.get("address", ""),
-            "doc_is_rights":  context.user_data.get("is_rights", True),
-            "doc_is_zagran":  context.user_data.get("is_zagran", True),
-            "doc_is_diploma": context.user_data.get("is_diploma", False),
+            "doc_fio":         context.user_data.get("fio"),
+            "doc_fio_en":      context.user_data.get("fio_en"),
+            "doc_dob":         context.user_data.get("dob"),
+            "doc_sex":         "Ч" if context.user_data.get("sex") == "M" else "Ж",
+            "doc_address":     context.user_data.get("address", ""),
+            "doc_is_rights":   context.user_data.get("is_rights", True),
+            "doc_is_zagran":   context.user_data.get("is_zagran", True),
+            "doc_is_diploma":  context.user_data.get("is_diploma", False),
             "doc_photo_path": photo_path,
         })
         await async_save(USERS_KEY, users)
@@ -1487,26 +1405,26 @@ async def _process_order(update: Update, context: ContextTypes.DEFAULT_TYPE, uid
 
     orders = await async_load(ORDERS_KEY, {})
     orders[oid] = {
-        "user_id":     uid,
-        "tariff":      context.user_data.get("tariff"),
-        "tariff_name": context.user_data.get("tariff_name"),
-        "fio":         context.user_data.get("fio"),
-        "dob":         context.user_data.get("dob"),
-        "sex":         context.user_data.get("sex"),
-        "address":     context.user_data.get("address", ""),
-        "is_rights":   context.user_data.get("is_rights", True),
-        "is_zagran":   context.user_data.get("is_zagran", True),
-        "is_diploma":  context.user_data.get("is_diploma", False),
-        "is_study":    context.user_data.get("is_study", False),
-        "promo":       context.user_data.get("promo_code"),
-        "discount":    discount,
-        "price":       base_price,
-        "final_price": final_price,
-        "created_at":  now_str(),
-        "status":      "pending",
-        "photo_path":  photo_path,
-        "values_data": values_data,
-        "js_content":  js_content,
+        "user_id":      uid,
+        "tariff":       context.user_data.get("tariff"),
+        "tariff_name":  context.user_data.get("tariff_name"),
+        "fio":          context.user_data.get("fio"),
+        "dob":          context.user_data.get("dob"),
+        "sex":          context.user_data.get("sex"),
+        "address":      context.user_data.get("address", ""),
+        "is_rights":    context.user_data.get("is_rights", True),
+        "is_zagran":    context.user_data.get("is_zagran", True),
+        "is_diploma":   context.user_data.get("is_diploma", False),
+        "is_study":     context.user_data.get("is_study", False),
+        "promo":        context.user_data.get("promo_code"),
+        "discount":     discount,
+        "price":        base_price,
+        "final_price":  final_price,
+        "created_at":   now_str(),
+        "status":       "pending",
+        "photo_path":   photo_path,
+        "values_data":  values_data,
+        "js_content":   js_content,
     }
     await async_save(ORDERS_KEY, orders)
 
@@ -2029,7 +1947,7 @@ async def adm_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await safe_edit(q,
         f"📊 <b>Статистика</b>  {now_fmt()}\n\n"
-        f"👥 Юзерів: <b>{len(users)}</b>  (+$new_u_24h за 24г)\n"
+        f"👥 Юзерів: <b>{len(users)}</b>  (+{new_u_24h} за 24г)\n"
         f"📦 Замовлення: <b>{total_o}</b>  |  ✅ {done_o}  🌐 {deployed_o}  ⏳ {pending_o}  ❌ {rejected_o}\n"
         f"📈 За 24г: +{new_o_24h} замовлень\n\n"
         f"💰 Дохід: <b>{revenue}₴</b>",
@@ -2247,8 +2165,8 @@ async def adm_push_pages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safe_edit(q,
         f"🚀 <b>Підтвердіть деплой</b>\n\n"
         f"📦 <code>{esc(oid)}</code>\n👤 <code>{client_uid}</code>\n📝 {esc(order.get('fio','?'))}\n\n"
-        "Буде виконано:\n1️⃣ Оновлення 2/index.html\n2️⃣ Пуш папки 2 → URL\n"
-        "3️⃣ QR → 1/assets/q.png\n4️⃣ Пуш папки 1 → посилання клієнту",
+        "Буде виконано:\n1️⃣ Оновлення index.html\n2️⃣ Пуш папки → URL\n"
+        "3️⃣ Генерація QR\n4️⃣ Пуш фінального ресурсу",
         mkb([InlineKeyboardButton("✅ Деплоїти", callback_data=f"adm_push_go:{client_uid}:{oid}")],
             [InlineKeyboardButton("❌ Скасувати", callback_data="admin_panel")]))
 
@@ -2285,7 +2203,7 @@ async def adm_push_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(client_uid,
                 f"✅ <b>Кабінет готовий!</b>\n\n🔗 {folder1_url}{sub_line}\n\n"
-                f"⏱ Якщо не відкривається — зачекайте 1-2 хв.\n📋 <code>{esc(oid)}</code>",
+                f"⏱ Якщо не відкривається — зачекайте 1-2 хвилини.\n📋 <code>{esc(oid)}</code>",
                 parse_mode="HTML")
         except Exception as e:
             logger.error("Client notify error: %s", e)
@@ -2316,10 +2234,7 @@ async def adm_chain_deploy_menu(update: Update, context: ContextTypes.DEFAULT_TY
     status = "✅ Готовий" if has_gh else "❌ Потрібні PAGES_GH_TOKEN і GH_TOKEN_2"
     await safe_edit(q,
         f"🚀 <b>Деплой ланцюжком</b>\n\n{status}\n\n"
-        "Ця дія:\n1️⃣ Пушить папку 2 → отримує URL\n"
-        "2️⃣ Генерує QR з URL → 1/assets/q.png\n"
-        "3️⃣ Пушить папку 1 (з новим QR)\n\n"
-        "Без прив'язки до замовлення — просто оновити сайт.",
+        "Ця дія оновлює весь ланцюжок сайтів та активує сторінки.",
         mkb([InlineKeyboardButton("🚀 Запустити", callback_data="chain_deploy_run")] if has_gh else [],
             back_btn("admin_panel")))
 
@@ -2337,8 +2252,7 @@ async def adm_chain_deploy_run(update: Update, context: ContextTypes.DEFAULT_TYP
             f"🚀 <b>Ланцюжок деплою завершено!</b>\n\n"
             f"📁 Папка 2:\n🔗 {esc(folder2_url)}\n\n"
             f"📁 Папка 1 (з QR):\n🔗 <b>{esc(folder1_url)}</b>\n\n"
-            f"📷 QR у <code>1/assets/q.png</code> веде на папку 2.\n"
-            f"⏱ Зачекайте 1-2 хвилини, якщо сайти ще не відкрились.",
+            f"⏱ Зачекайте 1-2 хвилини, якщо сайти ще не відкрилися.",
             mkb(back_btn("admin_panel")))
     except chain_deploy.DeployError as e:
         await safe_edit(q, f"❌ <b>Помилка деплою</b>\n\n<code>{esc(str(e))}</code>",
@@ -2384,7 +2298,7 @@ async def adm_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for uid2, u in sorted_u:
         badges = ("👑" if u.get("vip") else "") + ("🚫" if u.get("banned") else "") + ("💰" if u.get("has_bought") else "🆕")
         text += f"{badges} <b>{esc(u.get('first_name','?'))}</b> (@{esc(u.get('username','?'))})\n"
-        text += f"   🆔 {uid2} | 💳 {u.get('balance',0)}₴ | 👥 {u.get('ref_count',0)}\n\n"
+        text += f"    🆔 {uid2} | 💳 {u.get('balance',0)}₴ | 👥 {u.get('ref_count',0)}\n\n"
     await safe_edit(q, text, mkb(
         [InlineKeyboardButton("🔍 Пошук", callback_data="adm:search"),
          InlineKeyboardButton("💰 Баланс", callback_data="adm:balance")],
@@ -2973,10 +2887,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "profile_edit_menu": profile_edit_menu,
             "profile_redeploy":  profile_redeploy,
             "my_orders":          my_orders_handler,
-            "ref_menu":           ref_menu,
+            "ref_menu":            ref_menu,
             "withdraw":          withdraw_handler,
             "feedback":          feedback_menu,
-            "about":              about_handler,
+            "about":             about_handler,
             "promo_enter":        promo_enter,
             "admin_panel":        admin_panel,
             "adm:stats":          adm_stats,
@@ -3051,7 +2965,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 
-# ── Commands ───────────────────────────────────────────────────────────────────
+# ── Additional Commands ────────────────────────────────────────────────────────
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -3084,7 +2998,7 @@ async def cmd_deploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🚀 <b>Деплой завершено!</b>\n\n"
             f"📁 Папка 2:\n🔗 {esc(result['folder2_url'])}\n\n"
             f"📁 Папка 1 (з QR):\n🔗 <b>{esc(result['folder1_url'])}</b>\n\n"
-            f"📷 QR у <code>1/assets/q.png</code>\n⏱ Зачекайте 1-2 хвилини.",
+            f"⏱ Зачекайте 1-2 хвилини.",
             parse_mode="HTML")
     except chain_deploy.DeployError as e:
         await msg.edit_text(f"❌ <b>Помилка деплою</b>\n\n<code>{esc(str(e))}</code>", parse_mode="HTML")
@@ -3155,13 +3069,13 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 
-# ── Main Application Entrypoint ────────────────────────────────────────────────
+# ── Main Entrypoint ────────────────────────────────────────────────────────────
 
 def main():
     os.makedirs(ORDER_PHOTOS_DIR, exist_ok=True)
 
     _db.init_db()
-    logger.info("✅ SQLite Cloud підключено.")
+    logger.info("✅ Базу даних ініціалізовано.")
 
     _DB.update({
         USERS_KEY:    {"load": _db.load_users,       "save": _db.save_users},
