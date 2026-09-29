@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
+import io
 import logging
 import os
 import pathlib
@@ -8,55 +10,104 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 import qrcode
 import requests
 
 logger = logging.getLogger("chain_deploy")
-
-API = "https://api.github.com"
-FOLDER1_DIR = "1"
-FOLDER2_DIR = "2"
-QR_REL_PATH = "assets/q.png"
-INDEX_REL_PATH = "index.html"
-BRANCH = "main"
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 
 class DeployError(Exception):
+    """Базовий клас для помилок деплою."""
     pass
 
 
-def _headers(token: str) -> dict:
-    return {
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
+class GitHubAPIError(DeployError):
+    """Помилка взаємодії з GitHub API."""
+    def __init__(self, message: str, status_code: Optional[int] = None, response_text: str = ""):
+        super().__init__(f"{message} (status={status_code}): {response_text[:200]}")
+        self.status_code = status_code
+        self.response_text = response_text
 
 
-def _gh(token: str, method: str, path: str, **kwargs):
-    resp = requests.request(
-        method,
-        f"{API}{path}",
-        headers=_headers(token),
-        timeout=30,
-        **kwargs,
-    )
-    if not resp.ok:
-        logger.error("[GH] %s %s -> %s: %s", method, path, resp.status_code, resp.text[:300])
-        resp.raise_for_status()
-    return resp.json() if resp.text else {}
+@dataclasses.dataclass
+class DeployConfig:
+    """Конфігурація середовища та параметрів деплою."""
+    api_url: str = "https://api.github.com"
+    branch: str = "main"
+    folder1_dir: str = "1"
+    folder2_dir: str = "2"
+    qr_rel_path: str = "assets/q.png"
+    index_rel_path: str = "index.html"
+    
+    # Credentials for Folder 2 (New Repositories)
+    token_2: str = dataclasses.field(default_factory=lambda: os.getenv("GH_TOKEN_2", "").strip())
+    username_2_override: Optional[str] = dataclasses.field(default_factory=lambda: os.getenv("GH_USERNAME_2"))
+    repo_2_prefix: str = dataclasses.field(default_factory=lambda: os.getenv("PAGES_REPO_2", "site2").strip())
+
+    # Credentials for Folder 1 (Main Repository)
+    token_1: str = dataclasses.field(default_factory=lambda: os.getenv("PAGES_GH_TOKEN", "").strip())
+    username_1_override: Optional[str] = dataclasses.field(default_factory=lambda: os.getenv("GH_USERNAME"))
+    repo_1_name: str = dataclasses.field(default_factory=lambda: os.getenv("PAGES_REPO_1", "diia-main-pages").strip())
+
+    max_retries: int = 3
+    timeout: int = 30
 
 
-def _get_username(token: str, override: str | None) -> str:
-    if override and override.strip():
-        return override.strip()
-    return _gh(token, "GET", "/user")["login"]
+class GitHubClient:
+    """Клієнт для обробки запитів до GitHub REST/Git Trees API з підтримкою Retry."""
+    
+    def __init__(self, token: str, config: DeployConfig):
+        if not token:
+            raise DeployError("GitHub API token обов'язковий!")
+        self.token = token
+        self.config = config
+        self.session = requests.Session()
+        self.session.headers.update({
+            "Authorization": f"token {self.token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        })
+
+    def request(self, method: str, path: str, **kwargs) -> Any:
+        url = f"{self.config.api_url}{path}"
+        kwargs.setdefault("timeout", self.config.timeout)
+        
+        for attempt in range(1, self.config.max_retries + 1):
+            try:
+                resp = self.session.request(method, url, **kwargs)
+                
+                # Обробка Rate Limit або Server Error
+                if resp.status_code in (429, 500, 502, 503, 504) and attempt < self.config.max_retries:
+                    sleep_time = attempt * 2
+                    logger.warning("[GH Retry %d/%d] HTTP %s for %s %s. Waiting %ds...", 
+                                   attempt, self.config.max_retries, resp.status_code, method, path, sleep_time)
+                    time.sleep(sleep_time)
+                    continue
+
+                if not resp.ok:
+                    logger.error("[GH Error] %s %s -> %s: %s", method, path, resp.status_code, resp.text[:300])
+                    raise GitHubAPIError("GitHub API request failed", resp.status_code, resp.text)
+                
+                return resp.json() if resp.text else {}
+
+            except (requests.ConnectionError, requests.Timeout) as e:
+                if attempt == self.config.max_retries:
+                    raise DeployError(f"Мережева помилка після {self.config.max_retries} спроб: {e}") from e
+                time.sleep(attempt * 2)
+
+    def get_username(self, override: Optional[str] = None) -> str:
+        if override and override.strip():
+            return override.strip()
+        return self.request("GET", "/user")["login"]
 
 
-def _make_repo_name(prefix: str, order_id: str | int | None) -> str:
-    """Генерує УНІКАЛЬНЕ ім'я репо. Якщо ID порожній — додає унікальний UUID/Timestamp."""
-    clean_prefix = (prefix or "site2").strip()
+def _make_repo_name(prefix: str, order_id: Optional[str | int]) -> str:
+    """Генерує унікальне і безпечне ім'я репозиторію."""
+    clean_prefix = (prefix or "site2").strip().lower()
+    clean_prefix = re.sub(r"[^a-z0-9_-]", "-", clean_prefix)
 
     uid = uuid.uuid4().hex[:6]
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -67,207 +118,285 @@ def _make_repo_name(prefix: str, order_id: str | int | None) -> str:
     else:
         name = f"{clean_prefix}-{ts}-{uid}"
 
-    return name[:100]
+    return name[:100].lower()
 
 
-def _create_new_repo_strict(token: str, username: str, repo_name: str) -> None:
-    """Створює СВІЖИЙ репозиторій. Якщо такий вже існує — кидає DeployError."""
-    if not repo_name or not repo_name.strip():
-        raise DeployError("Назва репозиторію порожня!")
-
-    repo_name = repo_name.strip()
-
-    # Перевіряємо, чи існує репо
-    try:
-        _gh(token, "GET", f"/repos/{username}/{repo_name}")
-        raise DeployError(f"Репозиторій {username}/{repo_name} ВЖЕ ІСНУЄ! Перезапис заборонено.")
-    except requests.HTTPError as e:
-        if e.response is not None and e.response.status_code != 404:
-            raise
-
-    # Створюємо новий з auto_init=True, щоб створити дефолтну гілку
-    logger.info("Creating NEW repository: %s/%s", username, repo_name)
-    _gh(
-        token,
-        "POST",
-        "/user/repos",
-        json={
-            "name": repo_name,
-            "description": "FunsDiia order deploy",
-            "private": False,
-            "auto_init": True,
-            "has_issues": False,
-            "has_projects": False,
-            "has_wiki": False,
-        },
-    )
-    logger.info("Repo created: %s/%s", username, repo_name)
-    time.sleep(2)
-
-
-def _push_file(token: str, username: str, repo: str, rel_path: str, content: bytes) -> None:
-    path = f"/repos/{username}/{repo}/contents/{rel_path}"
-    sha = None
-
-    # Перевіряємо, чи файл вже існує (потрібно sha для оновлення)
-    try:
-        res = _gh(token, "GET", path)
-        if isinstance(res, dict) and "sha" in res:
-            sha = res["sha"]
-    except requests.HTTPError as e:
-        if e.response is not None and e.response.status_code != 404:
-            raise
-
-    payload = {
-        "message": f"deploy: {rel_path}",
-        "content": base64.b64encode(content).decode("utf-8"),
-        "branch": BRANCH,
-    }
-    if sha:
-        payload["sha"] = sha
-
-    _gh(token, "PUT", path, json=payload)
-
-
-def _collect_files(local_dir: str) -> dict[str, pathlib.Path]:
+def _collect_files(local_dir: str) -> Dict[str, pathlib.Path]:
+    """Збирає всі файли з диска, ігноруючи .git та __pycache__."""
     root = pathlib.Path(local_dir)
     if not root.is_dir():
-        raise DeployError(f"Папка '{local_dir}' не знайдена")
-    files = {
-        str(f.relative_to(root)).replace("\\", "/"): f
-        for f in root.rglob("*")
-        for f_part in f.parts
-        if f.is_file() and ".git" not in f.parts and "__pycache__" not in f.parts
-    }
+        raise DeployError(f"Папка '{local_dir}' не знайдена!")
+    
+    files = {}
+    for f in root.rglob("*"):
+        if f.is_file() and not any(part.startswith(".") or part == "__pycache__" for part in f.parts):
+            rel_path = str(f.relative_to(root)).replace("\\", "/")
+            files[rel_path] = f
+
     if not files:
-        raise DeployError(f"У папці '{local_dir}' немає файлів")
+        raise DeployError(f"Папка '{local_dir}' порожня!")
     return files
 
 
-def _enable_pages(token: str, username: str, repo: str) -> str:
+def _push_folder_atomerly(
+    gh: GitHubClient,
+    username: str,
+    repo: str,
+    files: Dict[str, pathlib.Path],
+    overrides: Optional[Dict[str, bytes]] = None,
+    branch: str = "main",
+    commit_message: str = "deploy: batch update"
+) -> None:
+    """
+    Завантажує всю папку ОДНИМ коммітом за допомогою Git Trees API (значно швидше ніж окремі PUT).
+    """
+    overrides = overrides or {}
+    logger.info("Batch pushing %d files to %s/%s via Git Data API...", len(files), username, repo)
+
+    # 1. Створюємо blobs для всіх файлів
+    tree_items: List[Dict[str, Any]] = []
+    for rel_path, abs_path in files.items():
+        content = overrides.get(rel_path, abs_path.read_bytes())
+        
+        # Створення Blob
+        blob_res = gh.request("POST", f"/repos/{username}/{repo}/git/blobs", json={
+            "content": base64.b64encode(content).decode("utf-8"),
+            "encoding": "base64"
+        })
+        
+        tree_items.append({
+            "path": rel_path,
+            "mode": "100644",
+            "type": "blob",
+            "sha": blob_res["sha"]
+        })
+
+    # 2. Отримуємо останній комміт гілки (якщо є)
+    parent_sha = None
+    try:
+        ref_res = gh.request("GET", f"/repos/{username}/{repo}/git/ref/heads/{branch}")
+        parent_sha = ref_res["object"]["sha"]
+    except GitHubAPIError as e:
+        if e.status_code != 404:
+            raise
+
+    # 3. Створюємо дерево (Tree)
+    tree_payload: Dict[str, Any] = {"tree": tree_items}
+    if parent_sha:
+        # Отримуємо tree sha батьківського комміту
+        commit_info = gh.request("GET", f"/repos/{username}/{repo}/git/commits/{parent_sha}")
+        tree_payload["base_tree"] = commit_info["tree"]["sha"]
+
+    tree_res = gh.request("POST", f"/repos/{username}/{repo}/git/trees", json=tree_payload)
+    new_tree_sha = tree_res["sha"]
+
+    # 4. Створюємо комміт
+    commit_payload: Dict[str, Any] = {
+        "message": commit_message,
+        "tree": new_tree_sha,
+    }
+    if parent_sha:
+        commit_payload["parents"] = [parent_sha]
+
+    commit_res = gh.request("POST", f"/repos/{username}/{repo}/git/commits", json=commit_payload)
+    new_commit_sha = commit_res["sha"]
+
+    # 5. Оновлюємо або створюємо посилання (Ref)
+    if parent_sha:
+        gh.request("PATCH", f"/repos/{username}/{repo}/git/refs/heads/{branch}", json={
+            "sha": new_commit_sha,
+            "force": True
+        })
+    else:
+        gh.request("POST", f"/repos/{username}/{repo}/git/refs", json={
+            "ref": f"refs/heads/{branch}",
+            "sha": new_commit_sha
+        })
+
+
+def _create_new_repo_strict(gh: GitHubClient, username: str, repo_name: str) -> None:
+    """Створює новий порожній репозиторій. Кидає виняток, якщо існує."""
+    if not repo_name:
+        raise DeployError("Назва репозиторію не може бути порожньою!")
+
+    try:
+        gh.request("GET", f"/repos/{username}/{repo_name}")
+        raise DeployError(f"Репозиторій {username}/{repo_name} ВЖЕ ІСНУЄ!")
+    except GitHubAPIError as e:
+        if e.status_code != 404:
+            raise
+
+    logger.info("Creating fresh repository: %s/%s", username, repo_name)
+    gh.request("POST", "/user/repos", json={
+        "name": repo_name,
+        "description": "Auto-generated order deploy",
+        "private": False,
+        "auto_init": True,  # Створює початковий комміт для ініціалізації гілки main
+        "has_issues": False,
+        "has_projects": False,
+        "has_wiki": False,
+    })
+    time.sleep(2)  # Даємо GitHub час для ініціалізації репо
+
+
+def _enable_pages(gh: GitHubClient, username: str, repo: str, branch: str = "main") -> str:
+    """Вмикає GitHub Pages для репозиторію."""
     url = f"https://{username}.github.io/{repo}/"
     try:
-        _gh(
-            token,
-            "POST",
-            f"/repos/{username}/{repo}/pages",
-            json={"source": {"branch": BRANCH, "path": "/"}},
-        )
-    except requests.HTTPError as e:
-        if e.response is not None and e.response.status_code == 409:
-            logger.info("Pages already enabled for %s/%s", username, repo)
+        gh.request("POST", f"/repos/{username}/{repo}/pages", json={
+            "source": {"branch": branch, "path": "/"}
+        })
+    except GitHubAPIError as e:
+        if e.status_code == 409:
+            logger.info("Pages already active for %s/%s", username, repo)
         else:
             raise
     return url
 
 
-def _push_folder(
-    token: str,
-    username: str,
-    repo: str,
-    files: dict[str, pathlib.Path],
-    overrides: dict[str, bytes] | None = None,
-) -> None:
-    overrides = overrides or {}
-    logger.info("Pushing %d files to %s/%s", len(files), username, repo)
-    for rel_path, abs_path in files.items():
-        content = overrides.get(rel_path, abs_path.read_bytes())
-        _push_file(token, username, repo, rel_path, content)
-
-
-def get_rendered_index_content(values_data: dict) -> bytes:
-    """Підставляє значення в 2/index.html В ПАМ'ЯТІ, НЕ ТОРКАЮЧИСЬ диска."""
-    index_path = pathlib.Path(FOLDER2_DIR) / INDEX_REL_PATH
+def get_rendered_index_content(index_path: pathlib.Path, values_data: Dict[str, Any]) -> bytes:
+    """Підставляє шаблоновані значення у HTML без перезапису файлів на диску."""
     if not index_path.exists():
-        logger.warning("2/index.html не знайдено")
+        logger.warning("%s не знайдено, пропуск підстановки", index_path)
         return b""
 
     content = index_path.read_text(encoding="utf-8")
     for key, val in values_data.items():
-        content = content.replace(f"{{{{{key}}}}}", str(val))
+        content = content.replace(f"{{{{{key}}}}}", str(val if val is not None else ""))
 
     return content.encode("utf-8")
 
 
 def deploy_folder2_for_order(
-    values_data: dict | None = None,
-    order_id: str | None = None,
-) -> tuple[str, str]:
-    """Деплоїть папку 2/ у НОВИЙ унікальний репозиторій. Повертає (url, repo_name)"""
-    token = os.getenv("GH_TOKEN_2", "").strip()
-    if not token:
-        raise DeployError("GH_TOKEN_2 не встановлено")
+    config: DeployConfig,
+    values_data: Optional[Dict[str, Any]] = None,
+    order_id: Optional[str] = None,
+) -> Tuple[str, str]:
+    """Створює окремий репозиторій під замовлення та деплоїть туди Folder 2."""
+    gh = GitHubClient(config.token_2, config)
+    username = gh.get_username(config.username_2_override)
+    repo_name = _make_repo_name(config.repo_2_prefix, order_id)
 
-    username = _get_username(token, os.getenv("GH_USERNAME_2"))
-    prefix = os.getenv("PAGES_REPO_2", "").strip() or "site2"
-
-    repo_name = _make_repo_name(prefix, order_id)
-    logger.info("Order %s -> BRAND NEW repo: %s/%s", order_id, username, repo_name)
+    logger.info("Order %s -> Generating repo: %s/%s", order_id, username, repo_name)
 
     overrides = {}
     if values_data:
-        overrides[INDEX_REL_PATH] = get_rendered_index_content(values_data)
+        index_file = pathlib.Path(config.folder2_dir) / config.index_rel_path
+        overrides[config.index_rel_path] = get_rendered_index_content(index_file, values_data)
 
-    _create_new_repo_strict(token, username, repo_name)
+    _create_new_repo_strict(gh, username, repo_name)
+    
+    files = _collect_files(config.folder2_dir)
+    _push_folder_atomerly(
+        gh, username, repo_name, files, 
+        overrides=overrides, branch=config.branch, commit_message=f"deploy order: {order_id}"
+    )
 
-    _push_folder(token, username, repo_name, _collect_files(FOLDER2_DIR), overrides=overrides)
-
-    url = _enable_pages(token, username, repo_name)
-    logger.info("Order %s Pages URL: %s", order_id, url)
+    url = _enable_pages(gh, username, repo_name, branch=config.branch)
+    logger.info("Order %s deployed at %s", order_id, url)
     return url, repo_name
 
 
-def generate_qr(target_url: str) -> str:
-    qr_path = pathlib.Path(FOLDER1_DIR) / QR_REL_PATH
-    qr_path.parent.mkdir(parents=True, exist_ok=True)
-    qrcode.make(target_url).save(qr_path)
-    logger.info("QR saved: %s -> %s", target_url, qr_path)
-    return str(qr_path)
+def generate_qr(target_url: str, save_path: pathlib.Path) -> bytes:
+    """Генерує QR-код, повертає його байтами та записує за вказаним шляхом."""
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(target_url)
+    qr.make(fit=True)
+
+    img = qr.make_image(fill_color="black", back_color="white")
+    
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    img_bytes = buf.getvalue()
+
+    save_path.write_bytes(img_bytes)
+    logger.info("QR code generated for %s -> saved at %s", target_url, save_path)
+    return img_bytes
 
 
-def deploy_folder1() -> str:
-    """Папка 1/ пушиться в постійний репо (тут оновлення дозволено)."""
-    token = os.getenv("PAGES_GH_TOKEN", "").strip()
-    if not token:
-        raise DeployError("PAGES_GH_TOKEN не встановлено")
-
-    username = _get_username(token, os.getenv("GH_USERNAME"))
-    repo = os.getenv("PAGES_REPO_1", "").strip() or "diia-main-pages"
+def deploy_folder1(config: DeployConfig, qr_bytes_override: Optional[bytes] = None) -> str:
+    """Пушить Folder 1 в основний центральний репозиторій."""
+    gh = GitHubClient(config.token_1, config)
+    username = gh.get_username(config.username_1_override)
+    repo = config.repo_1_name
 
     try:
-        _gh(token, "GET", f"/repos/{username}/{repo}")
-    except requests.HTTPError as e:
-        if e.response is not None and e.response.status_code == 404:
-            _gh(
-                token,
-                "POST",
-                "/user/repos",
-                json={"name": repo, "private": False, "auto_init": True},
-            )
+        gh.request("GET", f"/repos/{username}/{repo}")
+    except GitHubAPIError as e:
+        if e.status_code == 404:
+            logger.info("Main repo %s/%s missing. Creating...", username, repo)
+            gh.request("POST", "/user/repos", json={"name": repo, "private": False, "auto_init": True})
             time.sleep(2)
         else:
             raise
 
-    _push_folder(token, username, repo, _collect_files(FOLDER1_DIR))
+    overrides = {}
+    if qr_bytes_override:
+        overrides[config.qr_rel_path] = qr_bytes_override
+
+    files = _collect_files(config.folder1_dir)
+    _push_folder_atomerly(
+        gh, username, repo, files, 
+        overrides=overrides, branch=config.branch, commit_message="update folder 1 assets & QR"
+    )
 
     try:
-        res = _gh(token, "GET", f"/repos/{username}/{repo}/pages")
+        res = gh.request("GET", f"/repos/{username}/{repo}/pages")
         return res.get("html_url", f"https://{username}.github.io/{repo}/")
-    except requests.HTTPError:
-        return _enable_pages(token, username, repo)
+    except GitHubAPIError:
+        return _enable_pages(gh, username, repo, branch=config.branch)
 
 
-def run_full_chain(values_data: dict | None = None, order_id: str | None = None) -> dict:
-    folder2_url, repo2_name = deploy_folder2_for_order(values_data=values_data, order_id=order_id)
+def run_full_chain(
+    values_data: Optional[Dict[str, Any]] = None,
+    order_id: Optional[str] = None,
+    config: Optional[DeployConfig] = None
+) -> Dict[str, Any]:
+    """Головний оркестратор всього циклу деплою."""
+    config = config or DeployConfig()
 
-    qr_path = generate_qr(folder2_url)
+    logger.info("--- STARTING DEPLOY CHAIN FOR ORDER: %s ---", order_id)
 
-    folder1_url = deploy_folder1()
+    # 1. Деплой унікального сайту для замовлення (Folder 2)
+    folder2_url, repo2_name = deploy_folder2_for_order(
+        config=config,
+        values_data=values_data,
+        order_id=order_id
+    )
 
+    # 2. Генерація QR-коду, що веде на новий сайт
+    qr_full_path = pathlib.Path(config.folder1_dir) / config.qr_rel_path
+    qr_bytes = generate_qr(folder2_url, qr_full_path)
+
+    # 3. Пуш головного сайту/сканера (Folder 1) із новим QR-кодом
+    folder1_url = deploy_folder1(config=config, qr_bytes_override=qr_bytes)
+
+    logger.info("--- DEPLOY CHAIN SUCCESSFUL ---")
+    
     return {
         "folder2_url": folder2_url,
         "folder1_url": folder1_url,
-        "qr_path": qr_path,
+        "qr_path": str(qr_full_path),
         "repo2_name": repo2_name,
         "order_id": order_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+if __name__ == "__main__":
+    # Приклад запуску:
+    try:
+        result = run_full_chain(
+            values_data={"FULL_NAME": "Іван Іванов", "DOCUMENT_ID": "123456"},
+            order_id="ORD-9921"
+        )
+        print("Результат деплою:", result)
+    except DeployError as err:
+        logger.error("Помилка під час виконання ланцюжка: %s", err)
