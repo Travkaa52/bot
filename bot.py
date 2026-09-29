@@ -4304,18 +4304,16 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 
-# ── Main Entrypoint (Extended) ─────────────────────────────────────────────────
-
 def main():
-    """Точка запуску Telegram-бота FunsDiia."""
-    # Створення директорії під фото замовлень
+    """Головна точка запуску Telegram-бота FunsDiia."""
+    
+    # 1. Створення необхідних директорій
     os.makedirs(ORDER_PHOTOS_DIR, exist_ok=True)
 
-    # Ініціалізація структури бази даних
+    # 2. Ініціалізація бази даних та маппінг джерел
     _db.init_db()
     logger.info("✅ Базу даних ініціалізовано успішно.")
 
-    # Маппінг завантаження та збереження модулів
     _DB.update({
         USERS_KEY:    {"load": _db.load_users,       "save": _db.save_users},
         ORDERS_KEY:   {"load": _db.load_orders,      "save": _db.save_orders},
@@ -4325,7 +4323,7 @@ def main():
         SETTINGS_KEY: {"load": _db.load_settings_db, "save": _db.save_settings_db},
     })
 
-    # Перевірка наявності необхідних токенів
+    # 3. Перевірка змінних оточення
     if not PAGES_GH_TOKEN:
         logger.warning("⚠️ PAGES_GH_TOKEN не встановлено у змінних оточення!")
     if not os.getenv("GH_TOKEN_2"):
@@ -4333,10 +4331,10 @@ def main():
     if not GROUP_CHAT_ID:
         logger.warning("⚠️ GROUP_CHAT_ID не встановлено у змінних оточення!")
 
-    # Побудова додатку python-telegram-bot
+    # 4. Ініціалізація додатка
     app = Application.builder().token(TOKEN).build()
 
-    # Фонова задача перевірки підписок щогодини
+    # 5. Фонова задача перевірки підписок
     if app.job_queue:
         app.job_queue.run_repeating(
             subscription_check_job,
@@ -4345,7 +4343,7 @@ def main():
             name="subscription_check",
         )
 
-    # Реєстрація команд
+    # 6. Команди бота
     app.add_handler(CommandHandler("start",   cmd_start))
     app.add_handler(CommandHandler("help",    cmd_start))
     app.add_handler(CommandHandler("admin",   cmd_admin))
@@ -4355,17 +4353,45 @@ def main():
     app.add_handler(CommandHandler("unban",   cmd_unban))
     app.add_handler(CommandHandler("balance", cmd_balance))
 
-    # Реєстрація CallbackQuery та повідомлень
+    # 7. Адміністративні хендлери (Reply & Медіа від адміна)
+    admin_filter = filters.User(user_id=ADMIN_IDS)
+
+    # Відповідь адміна через Reply на переслане повідомлення
+    app.add_handler(MessageHandler(
+        admin_filter & filters.REPLY & filters.TEXT & ~filters.COMMAND,
+        _handle_admin_reply_msg
+    ))
+
+    # Відправка виконаних файлів/документів від адміна
+    app.add_handler(MessageHandler(
+        admin_filter & (filters.Document.ALL | filters.PHOTO | filters.VIDEO | filters.AUDIO),
+        _process_complete_order_files
+    ))
+
+    # 8. Адміністративні CallbackQuery (кнопки керування)
+    app.add_handler(CallbackQueryHandler(adm_users, pattern=r"^adm:users"))
+    app.add_handler(CallbackQueryHandler(adm_search, pattern=r"^adm:search$"))
+    app.add_handler(CallbackQueryHandler(adm_balance, pattern=r"^adm:balance$"))
+    app.add_handler(CallbackQueryHandler(adm_direct_balance, pattern=r"^adm_direct_balance:"))
+    app.add_handler(CallbackQueryHandler(adm_ban, pattern=r"^adm_ban:"))
+    app.add_handler(CallbackQueryHandler(adm_vip, pattern=r"^adm_vip:"))
+    app.add_handler(CallbackQueryHandler(adm_msg, pattern=r"^adm_msg:"))
+    app.add_handler(CallbackQueryHandler(adm_confirm_withdraw, pattern=r"^adm_confirm_withdraw:"))
+    app.add_handler(CallbackQueryHandler(adm_reject_withdraw, pattern=r"^adm_reject_withdraw:"))
+
+    # 9. Глобальний обробник CallbackQuery (для клієнтських кнопок та меню адмінки)
     app.add_handler(CallbackQueryHandler(button_handler))
+
+    # 10. Обробники повідомлень та медіа від користувачів
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL | filters.VIDEO, handle_media))
-    
-    # Реєстрація глобальної помилки
+
+    # 11. Обробка помилок
     app.add_error_handler(error_handler)
 
     logger.info("🌸 FunsDiia Bot успішно запущено! Адміни: %s | Група: %s", ADMIN_IDS, GROUP_CHAT_ID)
-    
-    # Запуск бота у режимі long polling
+
+    # 12. Запуск long-polling
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
