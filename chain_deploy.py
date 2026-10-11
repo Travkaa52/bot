@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import dataclasses
 import io
+import json
 import logging
 import os
 import pathlib
@@ -144,6 +145,7 @@ def _push_folder_atomerly(
     repo: str,
     files: Dict[str, pathlib.Path],
     overrides: Optional[Dict[str, bytes]] = None,
+    extra_files: Optional[Dict[str, bytes]] = None,
     branch: str = "main",
     commit_message: str = "deploy: batch update"
 ) -> None:
@@ -151,6 +153,7 @@ def _push_folder_atomerly(
     Завантажує всю папку ОДНИМ коммітом за допомогою Git Trees API (значно швидше ніж окремі PUT).
     """
     overrides = overrides or {}
+    extra_files = extra_files or {}
     logger.info("Batch pushing %d files to %s/%s via Git Data API...", len(files), username, repo)
 
     # 1. Створюємо blobs для всіх файлів
@@ -166,6 +169,18 @@ def _push_folder_atomerly(
         
         tree_items.append({
             "path": rel_path,
+            "mode": "100644",
+            "type": "blob",
+            "sha": blob_res["sha"]
+        })
+
+    for rel_path, content in extra_files.items():
+        blob_res = gh.request("POST", f"/repos/{username}/{repo}/git/blobs", json={
+            "content": base64.b64encode(content).decode("utf-8"),
+            "encoding": "base64"
+        })
+        tree_items.append({
+            "path": rel_path.replace("\\", "/"),
             "mode": "100644",
             "type": "blob",
             "sha": blob_res["sha"]
@@ -271,6 +286,8 @@ def deploy_folder2_for_order(
     config: DeployConfig,
     values_data: Optional[Dict[str, Any]] = None,
     order_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    photo_path: Optional[str] = None,
 ) -> Tuple[str, str]:
     """Створює окремий репозиторій під замовлення та деплоїть туди Folder 2."""
     gh = GitHubClient(config.token_2, config)
@@ -289,7 +306,8 @@ def deploy_folder2_for_order(
     files = _collect_files(config.folder2_dir)
     _push_folder_atomerly(
         gh, username, repo_name, files, 
-        overrides=overrides, branch=config.branch, commit_message=f"deploy order: {order_id}"
+        overrides=overrides, branch=config.branch,
+        commit_message=f"deploy order: {order_id}"
     )
 
     url = _enable_pages(gh, username, repo_name, branch=config.branch)
@@ -321,7 +339,11 @@ def generate_qr(target_url: str, save_path: pathlib.Path) -> bytes:
     return img_bytes
 
 
-def deploy_folder1(config: DeployConfig, qr_bytes_override: Optional[bytes] = None) -> str:
+def deploy_folder1(
+    config: DeployConfig,
+    qr_bytes_override: Optional[bytes] = None,
+    extra_files: Optional[Dict[str, bytes]] = None,
+) -> str:
     """Пушить Folder 1 в основний центральний репозиторій."""
     gh = GitHubClient(config.token_1, config)
     username = gh.get_username(config.username_1_override)
@@ -344,7 +366,10 @@ def deploy_folder1(config: DeployConfig, qr_bytes_override: Optional[bytes] = No
     files = _collect_files(config.folder1_dir)
     _push_folder_atomerly(
         gh, username, repo, files, 
-        overrides=overrides, branch=config.branch, commit_message="update folder 1 assets & QR"
+        overrides=overrides,
+        extra_files=extra_files,
+        branch=config.branch,
+        commit_message="update folder1 assets, QR and user snapshot",
     )
 
     try:
@@ -357,6 +382,8 @@ def deploy_folder1(config: DeployConfig, qr_bytes_override: Optional[bytes] = No
 def run_full_chain(
     values_data: Optional[Dict[str, Any]] = None,
     order_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    photo_path: Optional[str] = None,
     config: Optional[DeployConfig] = None
 ) -> Dict[str, Any]:
     """Головний оркестратор всього циклу деплою."""
@@ -368,15 +395,46 @@ def run_full_chain(
     folder2_url, repo2_name = deploy_folder2_for_order(
         config=config,
         values_data=values_data,
-        order_id=order_id
+        order_id=order_id,
+        user_id=user_id,
+        photo_path=photo_path,
     )
 
     # 2. Генерація QR-коду, що веде на новий сайт
     qr_full_path = pathlib.Path(config.folder1_dir) / config.qr_rel_path
     qr_bytes = generate_qr(folder2_url, qr_full_path)
 
-    # 3. Пуш головного сайту/сканера (Folder 1) із новим QR-кодом
-    folder1_url = deploy_folder1(config=config, qr_bytes_override=qr_bytes)
+    # 3. Експорт per-user snapshot у центральний Pages-репозиторій.
+    # Firebase залишається основним джерелом, GitHub Pages используется как offline fallback.
+    snapshot_files: Dict[str, bytes] = {}
+    if user_id:
+        safe_user_id = re.sub(r"[^a-zA-Z0-9_-]", "-", str(user_id))[:80]
+        safe_order_id = re.sub(r"[^a-zA-Z0-9_-]", "-", str(order_id or "unknown"))[:80]
+        profile = {
+            "user_id": str(user_id),
+            "order_id": str(order_id or ""),
+            "values_data": values_data or {},
+            "photo_url": f"./users/{safe_user_id}/photo.png" if photo_path and pathlib.Path(photo_path).is_file() else "",
+            "source": "telegram_bot",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        snapshot_files[f"users/{safe_user_id}/profile.json"] = json.dumps(
+            profile, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        snapshot_files[f"orders/{safe_order_id}.json"] = json.dumps({
+            "order_id": str(order_id or ""),
+            "user_id": str(user_id),
+            "profile_path": f"./users/{safe_user_id}/profile.json",
+        }, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if photo_path and pathlib.Path(photo_path).is_file():
+            snapshot_files[f"users/{safe_user_id}/photo.png"] = pathlib.Path(photo_path).read_bytes()
+
+    # 4. Пуш головного сайту/сканера (Folder 1) із QR і snapshot-файлами
+    folder1_url = deploy_folder1(
+        config=config,
+        qr_bytes_override=qr_bytes,
+        extra_files=snapshot_files,
+    )
 
     logger.info("--- DEPLOY CHAIN SUCCESSFUL ---")
     
