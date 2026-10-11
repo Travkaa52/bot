@@ -1024,8 +1024,8 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         bot_ui.heading("👤", "Профіль користувача", vip_label)
         + f"\n{bot_ui.row('ID', f'<code>{uid}</code>', '🆔')}"
-        + f"\n{bot_ui.row('Баланс', f'<code>{u.get('balance', 0)}₴</code>', '💰')}"
-        + f"\n{bot_ui.row('Реферали', f'<code>{u.get('ref_count', 0)}</code>', '👥')}"
+        + f"\n{bot_ui.row('Баланс', '<code>{}₴</code>'.format(u.get('balance', 0)), '💰')}"
+        + f"\n{bot_ui.row('Реферали', '<code>{}</code>'.format(u.get('ref_count', 0)), '👥')}"
         + cabinet_status
         + bot_ui.section("Заповнення профілю")
         + f"\n{progress_bar}"
