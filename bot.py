@@ -11,6 +11,7 @@ FunsDiia Bot — Преміум версія з керуванням даним�
 
 import asyncio
 import base64
+import csv
 import hashlib
 import html as _html_escape
 import io
@@ -43,6 +44,8 @@ from telegram.ext import (
 
 import chain_deploy
 import db as _db
+import ui as bot_ui
+from payment_state import infer_payment_state, set_payment_state
 
 load_dotenv()
 
@@ -200,6 +203,11 @@ def log_action(action: str, uid=None, details: dict = None):
         _db.log_action_db(now_str(), action, str(uid) if uid else None, details or {})
     except Exception as e:
         logger.error("Log action error: %s", e)
+
+
+def mark_order_payment(order: dict, state: str, actor_id, reason: str) -> dict:
+    """Apply a canonical payment transition while keeping legacy status fields."""
+    return set_payment_state(order, state, str(actor_id) if actor_id is not None else None, reason)
 
 
 # ── Tariffs & Settings Helpers ─────────────────────────────────────────────────
@@ -779,7 +787,9 @@ async def safe_edit(query, text: str, kb=None, **kw):
         kw["reply_markup"] = kb
     try:
         await query.edit_message_text(text, **kw)
-    except BadRequest:
+    except BadRequest as error:
+        if "message is not modified" in str(error).lower():
+            return
         try:
             await query.message.reply_text(text, **kw)
         except Exception as e:
@@ -924,29 +934,31 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     u = users.get(uid, {})
     if u.get("banned"):
-        await update.effective_message.reply_text("🚫 <b>Ваш акаунт заблоковано.</b>", parse_mode="HTML")
+        await update.effective_message.reply_text(
+            bot_ui.error("Доступ до акаунта тимчасово обмежений.", "Зверніться до підтримки через меню бота."),
+            parse_mode="HTML",
+        )
         return
     if settings.get("maintenance_mode") and not is_admin(uid):
-        await update.effective_message.reply_text("🛠 <b>Технічне обслуговування.</b> Спробуйте пізніше.", parse_mode="HTML")
+        await update.effective_message.reply_text(
+            bot_ui.error("Сервіс тимчасово на технічному обслуговуванні.", "Спробуйте повторити дію пізніше."),
+            parse_mode="HTML",
+        )
         return
 
-    vip = " 👑" if u.get("vip") else ""
     bal = u.get("balance", 0)
-    bal_line = f"\n💰 Баланс: <b>{bal}₴</b>" if bal > 0 else ""
-    welcome = settings.get("welcome_text") or (
-        f"👋 <b>{esc(update.effective_user.first_name)}{vip}</b>{bal_line}\n\n"
-        "🪪 <b>FunsDiia</b> — генерація та зручне управління документами.\n"
-        "⚡️ Ваш інтерактивний кабінет готовий за лічені хвилини."
+    welcome = settings.get("welcome_text") or bot_ui.home_intro(
+        esc(update.effective_user.first_name or "користувач"), bal, bool(u.get("vip"))
     )
 
     kb_rows = [
-        [InlineKeyboardButton("🛒 Замовити тариф", callback_data="catalog")],
-        [InlineKeyboardButton("👤 Профіль та Дані", callback_data="profile"),
-         InlineKeyboardButton("📂 Мої замовлення", callback_data="my_orders")],
-        [InlineKeyboardButton("🎟 Промо-код", callback_data="promo_enter"),
+        [InlineKeyboardButton("🛒 Тарифи", callback_data="catalog")],
+        [InlineKeyboardButton("👤 Профіль", callback_data="profile"),
+         InlineKeyboardButton("📦 Замовлення", callback_data="my_orders")],
+        [InlineKeyboardButton("🎟 Промокод", callback_data="promo_enter"),
          InlineKeyboardButton("👥 Реферали", callback_data="ref_menu")],
         [InlineKeyboardButton("💬 Підтримка", callback_data="feedback"),
-         InlineKeyboardButton("ℹ️ Про нас", callback_data="about")],
+         InlineKeyboardButton("ℹ️ Сервіс", callback_data="about")],
     ]
     if is_admin(uid):
         kb_rows.append([InlineKeyboardButton("⚙️ Адмін-панель", callback_data="admin_panel")])
@@ -1010,23 +1022,24 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cabinet_status = f"\n🌐 <b>Активний кабінет:</b> <a href='{pages_url}'>Відкрити</a>{expiry_info}"
 
     text = (
-        f"👤 <b>ОСОБИСТИЙ КАБІНЕТ & ПРОФІЛЬ</b>  [{vip_label}]\n"
-        f"────────────────────────────\n"
-        f"🆔 <b>ID:</b> <code>{uid}</code>\n"
-        f"💰 <b>Баланс:</b> <code>{u.get('balance', 0)}₴</code>\n"
-        f"👥 <b>Запрошено рефералів:</b> <code>{u.get('ref_count', 0)}</code>{cabinet_status}\n\n"
-        f"📊 <b>Заповненість профілю:</b>\n{progress_bar}\n\n"
-        f"📋 <b>ПЕРСОНАЛЬНІ ДАНІ ДОКУМЕНТІВ:</b>\n"
-        f"▫️ <b>ПІБ (Укр):</b> {esc(fio)}\n"
-        f"▫️ <b>ПІБ (Eng):</b> <code>{esc(fio_en)}</code>\n"
-        f"▫️ <b>Дата народження:</b> {esc(dob)}\n"
-        f"▫️ <b>Стать:</b> {sex}\n"
-        f"▫️ <b>Адреса:</b> {esc(addr)}\n"
-        f"▫️ <b>Водійські права:</b> {r}\n"
-        f"▫️ <b>Закордонний паспорт:</b> {z}\n"
-        f"▫️ <b>Диплом / Студентський:</b> {d}\n"
-        f"▫️ <b>Фото 3x4:</b> {photo_st}\n\n"
-        f"🔗 <b>Ваше реферальне посилання:</b>\n<code>{ref_link}</code>"
+        bot_ui.heading("👤", "Профіль користувача", vip_label)
+        + f"\n{bot_ui.row('ID', f'<code>{uid}</code>', '🆔')}"
+        + f"\n{bot_ui.row('Баланс', f'<code>{u.get('balance', 0)}₴</code>', '💰')}"
+        + f"\n{bot_ui.row('Реферали', f'<code>{u.get('ref_count', 0)}</code>', '👥')}"
+        + cabinet_status
+        + bot_ui.section("Заповнення профілю")
+        + f"\n{progress_bar}"
+        + bot_ui.section("Документи")
+        + f"\n{bot_ui.row('ПІБ', esc(fio), '📝')}"
+        + f"\n{bot_ui.row('ПІБ латиницею', f'<code>{esc(fio_en)}</code>', '🔤')}"
+        + f"\n{bot_ui.row('Дата народження', esc(dob), '📅')}"
+        + f"\n{bot_ui.row('Стать', sex, '👤')}"
+        + f"\n{bot_ui.row('Адреса', esc(addr), '🏠')}"
+        + f"\n{bot_ui.status('Права', r, '🚗')}"
+        + f"\n{bot_ui.status('Закордонний паспорт', z, '🌍')}"
+        + f"\n{bot_ui.status('Диплом / студентський', d, '🎓')}"
+        + f"\n{bot_ui.status('Фото 3x4', photo_st, '📸')}"
+        + f"\n\n🔗 <b>Реферальне посилання:</b>\n<code>{ref_link}</code>"
     )
 
     kb_rows = [
@@ -1245,7 +1258,7 @@ async def my_orders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not my:
         await safe_edit(
             q, 
-            "📭 <b>У вас ще немає замовлень.</b>\n\nОберіть тариф у каталозі, щоб створити свій перший інтерактивний кабінет!",
+            bot_ui.empty("Замовлень ще немає", "Оберіть тариф, щоб створити свій перший кабінет.", "Перейдіть до каталогу"),
             mkb([InlineKeyboardButton("🛒 Перейти до каталогу", callback_data="catalog")], back_btn("home"))
         )
         return
@@ -1262,11 +1275,9 @@ async def my_orders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_spent = sum(o.get("final_price", 0) for _, o in my if o.get("status") in ("deployed", "completed", "approved"))
 
     text = (
-        f"📂 <b>ІСТОРІЯ ЗАМОВЛЕННЯ</b>\n"
-        f"────────────────────────────\n"
-        f"📊 Всього замовлень: <b>{len(my)}</b>\n"
-        f"💰 Інвестовано в доступ: <b>{total_spent}₴</b>\n\n"
-        f"Оберіть замовлення зі списку для перегляду деталей:"
+        bot_ui.heading("📂", "Мої замовлення", "Оберіть замовлення для перегляду деталей")
+        + f"\n{bot_ui.row('Усього', len(my), '📦')}"
+        + f"\n{bot_ui.row('Інвестовано', f'{total_spent}₴', '💳')}"
     )
 
     kb_rows = []
@@ -1305,6 +1316,7 @@ async def user_ord_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     st = status_map.get(o.get("status", ""), o.get("status", "?"))
+    payment_state = infer_payment_state(o)
     url = esc(o.get("pages_url", ""))
     pages_line = f"\n🔗 <b>Посилання на кабінет:</b> <a href='{url}'>{url}</a>" if url else ""
 
@@ -1324,18 +1336,20 @@ async def user_ord_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if vd.get("isZagranEnabled", True): docs_summary.append("🌍 Загран")
     if vd.get("isDiplomaEnabled", False): docs_summary.append("🎓 Диплом")
     docs_text = ", ".join(docs_summary) if docs_summary else "Базовий пакет"
+    price_display = f"{o.get('final_price', '?')}₴"
 
     text = (
-        f"📦 <b>ДЕТАЛІ ЗАМОВЛЕННЯ #{esc(oid)}</b>\n"
-        f"────────────────────────────\n"
-        f"📊 <b>Статус:</b> {st}\n"
-        f"💎 <b>Тариф:</b> {esc(o.get('tariff_name', '?'))}\n"
-        f"💰 <b>Вартість:</b> {o.get('final_price', '?')}₴\n"
-        f"📅 <b>Створено:</b> {created_date}{sub_line}\n"
-        f"📑 <b>Включені документи:</b> {docs_text}{pages_line}\n\n"
-        f"👤 <b>Дані на момент видачі:</b>\n"
-        f"▫️ ПІБ: {esc(vd.get('fio', o.get('fio', '—')))}\n"
-        f"▫️ ДН: {esc(vd.get('birth', o.get('dob', '—')))}"
+        bot_ui.heading("📦", f"Замовлення #{esc(oid)}", "Деталі доступу та документів")
+        + f"\n{bot_ui.status('Статус', st, '📊')}"
+        + f"\n{bot_ui.status('Оплата', payment_state, '💳')}"
+        + f"\n{bot_ui.row('Тариф', esc(o.get('tariff_name', '?')), '💎')}"
+        + f"\n{bot_ui.row('Вартість', price_display, '💰')}"
+        + f"\n{bot_ui.row('Створено', created_date, '📅')}"
+        + sub_line
+        + f"\n{bot_ui.row('Документи', docs_text, '📑')}{pages_line}"
+        + bot_ui.section("Дані на момент видачі")
+        + f"\n{bot_ui.row('ПІБ', esc(vd.get('fio', o.get('fio', '—'))), '👤')}"
+        + f"\n{bot_ui.row('Дата народження', esc(vd.get('birth', o.get('dob', '—'))), '📅')}"
     )
 
     kb_rows = []
@@ -1358,17 +1372,12 @@ async def show_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not tariffs:
         await safe_edit(
             q,
-            "📭 <b>Наразі немає активних тарифів.</b>\n\nСпробуйте завітати пізніше або зверніться до підтримки.",
+            bot_ui.empty("Тарифи тимчасово недоступні", "Нові пропозиції з'являться після оновлення каталогу.", "Зверніться до підтримки"),
             mkb(back_btn("home"))
         )
         return
 
-    text = (
-        "🛒 <b>ОБЕРІТЬ ТАРИФ ПІДПИСКИ</b>\n"
-        "────────────────────────────\n"
-        "Оберіть оптимальний термін дії вашого кабінету.\n"
-        "Усі тарифи включають повний доступ до підключених документів.\n\n"
-    )
+    text = bot_ui.heading("🛒", "Каталог тарифів", "Оберіть термін доступу до кабінету") + "\n\n"
     
     kb_rows = []
     for k, t in tariffs.items():
@@ -1721,6 +1730,7 @@ async def _process_complete_order_files(update: Update, context: ContextTypes.DE
     orders = await async_load(ORDERS_KEY, {})
     if oid in orders:
         orders[oid]["status"] = "completed"
+        mark_order_payment(orders[oid], "paid", uid2, "order_completed")
         await async_save(ORDERS_KEY, orders)
 
     try:
@@ -1742,6 +1752,7 @@ async def _handle_admin_state(update: Update, context: ContextTypes.DEFAULT_TYPE
         if oid in orders:
             orders[oid]["status"] = "rejected"
             orders[oid]["reject_reason"] = text
+            mark_order_payment(orders[oid], "unpaid", uid, "admin_rejected")
             await async_save(ORDERS_KEY, orders)
             try:
                 await context.bot.send_message(uid2, f"❌ <b>Замовлення #{oid} відхилено.</b>\nПричина: {esc(text)}", parse_mode="HTML")
@@ -2164,6 +2175,9 @@ async def _process_order(update: Update, context: ContextTypes.DEFAULT_TYPE, uid
         "final_price":  final_price,
         "created_at":    now_str(),
         "status":       "pending",
+        "paid":         False,
+        "payment_status": "unpaid",
+        "payment_history": [],
         "photo_path":   photo_path,
         "values_data":  values_data,
         "js_content":   js_content,
@@ -2260,6 +2274,7 @@ async def _forward_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, u
 
     if auto_ok:
         orders[last_oid]["status"] = "approved"
+        mark_order_payment(orders[last_oid], "paid", uid, "receipt_ai_approved")
         orders[last_oid]["receipt_ai"] = ai_result
         await async_save(ORDERS_KEY, orders)
         log_action("ai_receipt_approved", uid, {"oid": last_oid, "confidence": confidence})
@@ -2389,13 +2404,8 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     orders = await async_load(ORDERS_KEY, {})
     pending = sum(1 for o in orders.values() if o.get("status") == "pending")
 
-    msg = (
-        f"⚙️ <b>ГОЛОВНЕ МЕНЮ АДМІНІСТРАТОРА</b>\n"
-        f"────────────────────────────\n"
-        f"👥 Користувачів: <b>{len(users)}</b>\n"
-        f"⏳ Очікують перевірки: <b>{pending}</b>\n"
-        f"🕐 Системний час: <code>{now_fmt()}</code>"
-    )
+    revenue = sum(o.get("final_price", 0) for o in orders.values() if o.get("status") in ("completed", "deployed"))
+    msg = bot_ui.admin_overview(len(users), len(orders), pending, revenue) + f"\n\n🕐 <code>{now_fmt()}</code>"
     kb = mkb(
         [InlineKeyboardButton("📊 Статистика", callback_data="adm:stats"),
          InlineKeyboardButton("📋 Замовлення", callback_data="adm:orders")],
@@ -2424,12 +2434,13 @@ async def adm_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     total_revenue = sum(o.get("final_price", 0) for o in orders.values() if o.get("status") in ("completed", "deployed"))
     
+    paid_orders = sum(1 for order in orders.values() if infer_payment_state(order) == "paid")
     text = (
-        f"📊 <b>ГЛИБОКА СТАТИСТИКА БОТА</b>\n"
-        f"────────────────────────────\n"
-        f"👥 Всього користувачів: <b>{len(users)}</b>\n"
-        f"📦 Всього замовлень: <b>{len(orders)}</b>\n"
-        f"💰 Загальний виручка: <b>{total_revenue}₴</b>\n"
+        bot_ui.heading("📊", "Аналітика системи", "Оперативна статистика бота")
+        + f"\n{bot_ui.row('Користувачі', len(users), '👥')}"
+        + f"\n{bot_ui.row('Замовлення', len(orders), '📦')}"
+        + f"\n{bot_ui.row('Оплачені замовлення', paid_orders, '💳')}"
+        + f"\n{bot_ui.row('Підтверджений дохід', f'{total_revenue}₴', '💰')}"
     )
     await safe_edit(q, text, mkb(back_btn("admin_panel")))
 
@@ -2457,8 +2468,76 @@ async def adm_order_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not o:
         await q.answer("Замовлення не знайдено", show_alert=True)
         return
-    text = f"📦 <b>Замовлення #{oid}</b>\nКористувач: <code>{o.get('user_id')}</code>\nСума: {o.get('final_price')}₴\nСтатус: {o.get('status')}"
-    await safe_edit(q, text, mkb(back_btn("adm:orders")))
+    payment_state = infer_payment_state(o)
+    text = (
+        f"📦 <b>Замовлення #{oid}</b>\n"
+        f"Користувач: <code>{o.get('user_id')}</code>\n"
+        f"Сума: {o.get('final_price')}₴\n"
+        f"Статус: {o.get('status')}\n"
+        f"Оплата: <b>{payment_state}</b>"
+    )
+    await safe_edit(
+        q,
+        text,
+        mkb(
+            [InlineKeyboardButton("✅ Позначити сплаченим", callback_data=f"adm_payment:{oid}:paid")],
+            [InlineKeyboardButton("↩️ Скасувати оплату", callback_data=f"adm_payment:{oid}:unpaid")],
+            back_btn("adm:orders"),
+        ),
+    )
+
+
+@admin_only
+async def adm_payment_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    parts = q.data.split(":")
+    if len(parts) != 3 or parts[2] not in ("paid", "unpaid"):
+        await q.answer("Некоректна операція", show_alert=True)
+        return
+    state = parts[2]
+    label = "позначити оплату підтвердженою" if state == "paid" else "скасувати підтвердження оплати"
+    await safe_edit(
+        q,
+        f"⚠️ Підтвердіть дію: <b>{label}</b> для замовлення <code>{esc(parts[1])}</code>?",
+        mkb(
+            [InlineKeyboardButton("Підтвердити", callback_data=f"adm_payment_do:{parts[1]}:{state}")],
+            [InlineKeyboardButton("Скасувати", callback_data=f"adm_order_view:{parts[1]}")],
+        ),
+    )
+
+
+@admin_only
+async def adm_payment_apply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    parts = q.data.split(":")
+    if len(parts) != 3 or parts[2] not in ("paid", "unpaid"):
+        await q.answer("Некоректна операція", show_alert=True)
+        return
+    oid, state = parts[1], parts[2]
+    orders = await async_load(ORDERS_KEY, {})
+    order = orders.get(oid)
+    if not order:
+        await q.answer("Замовлення не знайдено", show_alert=True)
+        return
+    mark_order_payment(order, state, q.from_user.id, "admin_manual_payment_update")
+    if state == "paid" and order.get("status") in ("pending", "rejected"):
+        order["status"] = "approved"
+    if state == "unpaid" and order.get("status") in ("approved", "deployed", "completed"):
+        order["status"] = "pending"
+    if not await async_save(ORDERS_KEY, orders):
+        await q.answer("Не вдалося зберегти зміни", show_alert=True)
+        return
+    log_action("admin_payment_update", q.from_user.id, {"oid": oid, "state": state})
+    try:
+        await context.bot.send_message(
+            order.get("user_id"),
+            f"ℹ️ Статус оплати замовлення #{esc(oid)} змінено: <b>{state}</b>.",
+            parse_mode="HTML",
+        )
+    except Exception:
+        logger.warning("Payment notification failed for order %s", oid)
+    await q.answer("Статус оплати оновлено")
+    await adm_order_view(update, context)
 
 
 @admin_only
@@ -2493,6 +2572,7 @@ async def adm_approve_deploy(update: Update, context: ContextTypes.DEFAULT_TYPE)
     orders = await async_load(ORDERS_KEY, {})
     if oid in orders:
         orders[oid]["status"] = "approved"
+        mark_order_payment(orders[oid], "paid", q.from_user.id, "admin_approved_with_deploy")
         await async_save(ORDERS_KEY, orders)
         await q.answer("Підтверджено!")
         try:
@@ -2513,6 +2593,7 @@ async def adm_approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
     orders = await async_load(ORDERS_KEY, {})
     if oid in orders:
         orders[oid]["status"] = "approved"
+        mark_order_payment(orders[oid], "paid", q.from_user.id, "admin_approved")
         await async_save(ORDERS_KEY, orders)
         await q.answer("Оплату підтверджено!")
         await context.bot.send_message(uid2, f"✅ Оплату за замовлення #{oid} підтверджено.")
@@ -2551,6 +2632,7 @@ async def adm_push_pages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             url = await _run_chain_deploy(oid, orders[oid])
             orders[oid]["pages_url"] = url
             orders[oid]["status"] = "deployed"
+            mark_order_payment(orders[oid], "paid", q.from_user.id, "admin_deployed")
             await async_save(ORDERS_KEY, orders)
             await q.answer("Деплой виконано!")
             await context.bot.send_message(uid2, f"🎉 Ваше замовлення #{oid} задеплоєно!\n🔗 {url}")
@@ -2721,16 +2803,40 @@ async def adm_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid2 = parts[1]
     
     users = await async_load(USERS_KEY, {})
-    if uid2 in users:
-        users[uid2]["banned"] = not users[uid2].get("banned", False)
-        await async_save(USERS_KEY, users)
-        
-        is_banned = users[uid2]["banned"]
-        action_text = "заблоковано" if is_banned else "розблоковано"
-        log_action("admin_ban_toggle", q.from_user.id, {"target_uid": uid2, "banned": is_banned})
-        
-        await q.answer(f"Користувача успішно {action_text}!", show_alert=True)
-        await _send_user_card(update, context, uid2, users[uid2])
+    if uid2 not in users:
+        await q.answer("Користувача не знайдено", show_alert=True)
+        return
+    action = "розблокувати" if users[uid2].get("banned", False) else "заблокувати"
+    await safe_edit(
+        q,
+        f"⚠️ Підтвердіть: <b>{action}</b> користувача <code>{esc(uid2)}</code>?",
+        mkb(
+            [InlineKeyboardButton("Підтвердити", callback_data=f"adm_ban_do:{uid2}")],
+            [InlineKeyboardButton("Скасувати", callback_data=f"adm_user_card:{uid2}")],
+        ),
+    )
+
+
+@admin_only
+async def adm_ban_apply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    parts = q.data.split(":")
+    if len(parts) != 2:
+        return
+    uid2 = parts[1]
+    users = await async_load(USERS_KEY, {})
+    if uid2 not in users:
+        await q.answer("Користувача не знайдено", show_alert=True)
+        return
+    users[uid2]["banned"] = not users[uid2].get("banned", False)
+    if not await async_save(USERS_KEY, users):
+        await q.answer("Не вдалося зберегти зміни", show_alert=True)
+        return
+    is_banned = users[uid2]["banned"]
+    action_text = "заблоковано" if is_banned else "розблоковано"
+    log_action("admin_ban_toggle", q.from_user.id, {"target_uid": uid2, "banned": is_banned})
+    await q.answer(f"Користувача успішно {action_text}!", show_alert=True)
+    await _send_user_card(update, context, uid2, users[uid2])
 
 
 @admin_only
@@ -3142,16 +3248,33 @@ BROADCAST_TEMPLATES = {
 }
 
 
+def broadcast_recipients(users: dict, segment: str) -> list:
+    segment = segment if segment in {"all", "buyers", "new"} else "all"
+    recipients = []
+    for uid2, user in users.items():
+        if user.get("banned"):
+            continue
+        if segment == "buyers" and not user.get("has_bought"):
+            continue
+        if segment == "new" and user.get("has_bought"):
+            continue
+        recipients.append((uid2, user))
+    return recipients
+
+
 @admin_only
 async def adm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     users = await async_load(USERS_KEY, {})
-    active = sum(1 for u in users.values() if not u.get("banned"))
+    segment = context.user_data.get("broadcast_segment", "all")
+    active = len(broadcast_recipients(users, segment))
+    segment_label = {"all": "усі активні", "buyers": "покупці", "new": "без покупки"}.get(segment, "усі активні")
 
     text = (
         f"📢 <b>РОЗСИЛКА ПОВІДОМЛЕНЬ</b>\n"
         f"────────────────────────────\n"
-        f"👥 Активних отримувачів: <b>{active}</b> із {len(users)}\n\n"
+        f"👥 Сегмент: <b>{segment_label}</b>\n"
+        f"👥 Отримувачів: <b>{active}</b> із {len(users)}\n\n"
         f"Виберіть готовий шаблон розсилки або натисніть <b>'✍️ Написати свій текст'</b>:\n"
     )
 
@@ -3159,10 +3282,25 @@ async def adm_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for t_id, t_info in BROADCAST_TEMPLATES.items():
         kb_rows.append([InlineKeyboardButton(f"📄 {t_info['title']}", callback_data=f"cast_tmpl:{t_id}")])
 
+    kb_rows.append([
+        InlineKeyboardButton("👥 Усі", callback_data="broadcast_segment:all"),
+        InlineKeyboardButton("💳 Покупці", callback_data="broadcast_segment:buyers"),
+    ])
+    kb_rows.append([InlineKeyboardButton("🆕 Без покупки", callback_data="broadcast_segment:new")])
     kb_rows.append([InlineKeyboardButton("✍️ Написати власний текст", callback_data="cast_custom")])
     kb_rows.append(back_btn("admin_panel"))
 
     await safe_edit(q, text, InlineKeyboardMarkup(kb_rows))
+
+
+@admin_only
+async def broadcast_segment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    segment = update.callback_query.data.split(":", 1)[1]
+    if segment not in {"all", "buyers", "new"}:
+        await update.callback_query.answer("Некоректний сегмент", show_alert=True)
+        return
+    context.user_data["broadcast_segment"] = segment
+    await adm_broadcast(update, context)
 
 
 @admin_only
@@ -3181,7 +3319,8 @@ async def cast_select_template(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data["state"] = None
 
     users = await async_load(USERS_KEY, {})
-    active_users = sum(1 for u in users.values() if not u.get("banned"))
+    segment = context.user_data.get("broadcast_segment", "all")
+    active_users = len(broadcast_recipients(users, segment))
 
     sample_text = tmpl["text"].format(first_name=q.from_user.first_name or "Користувач", user_id=q.from_user.id)
 
@@ -3240,15 +3379,14 @@ async def broadcast_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     users = await async_load(USERS_KEY, {})
+    segment = context.user_data.get("broadcast_segment", "all")
+    recipients = broadcast_recipients(users, segment)
     success = failed = blocked = 0
-    total = len(users)
+    total = len(recipients)
 
     await safe_edit(q, "📢 <b>Запуск розсилки...</b>\n⏳ Будь ласка, зачекайте. Це може зайняти певний час.")
 
-    for idx, (uid2, u) in enumerate(users.items(), 1):
-        if u.get("banned"):
-            blocked += 1
-            continue
+    for idx, (uid2, u) in enumerate(recipients, 1):
 
         fname = u.get("first_name", "Клієнт")
         formatted_text = raw_text.format(first_name=esc(fname), user_id=uid2)
@@ -3477,6 +3615,8 @@ async def adm_export_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🎟 Промо-коди (JSON)", callback_data="export:promos")],
             [InlineKeyboardButton("💬 Відгуки (JSON)", callback_data="export:feedback")],
             [InlineKeyboardButton("📜 Логи дій (JSON)", callback_data="export:logs")],
+            [InlineKeyboardButton("📈 Користувачі (CSV)", callback_data="export:users_csv")],
+            [InlineKeyboardButton("📦 Замовлення (CSV)", callback_data="export:orders_csv")],
             [InlineKeyboardButton("📊 Повний бекап усієї БД (ZIP)", callback_data="export:all")],
             back_btn("admin_panel")
         )
@@ -3526,6 +3666,25 @@ async def adm_export_do(update: Update, context: ContextTypes.DEFAULT_TYPE):
             filename = f"logs_{now_fmt('%Y%m%d_%H%M')}.json"
             content = json.dumps(logs, ensure_ascii=False, indent=2).encode()
             caption = f"📜 Логи дій: {len(logs)} записів"
+
+        elif export_type in ("users_csv", "orders_csv"):
+            if export_type == "users_csv":
+                data = await async_load(USERS_KEY, {})
+                rows = [{"id": uid2, **(user or {})} for uid2, user in data.items()]
+                filename = f"users_{now_fmt('%Y%m%d_%H%M')}.csv"
+                caption = f"👥 Користувачі: {len(rows)} записів"
+            else:
+                data = await async_load(ORDERS_KEY, {})
+                rows = [{"id": oid, **(order or {})} for oid, order in data.items()]
+                filename = f"orders_{now_fmt('%Y%m%d_%H%M')}.csv"
+                caption = f"📦 Замовлення: {len(rows)} записів"
+
+            fieldnames = sorted({key for row in rows for key, value in row.items() if not isinstance(value, (dict, list))})
+            csv_buffer = io.StringIO()
+            writer = csv.DictWriter(csv_buffer, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+            content = csv_buffer.getvalue().encode("utf-8-sig")
 
         elif export_type == "all":
             import zipfile
@@ -3667,10 +3826,8 @@ async def feedback_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["state"] = AWAIT_FEEDBACK
     await safe_edit(
         update.callback_query,
-        "💬 <b>СЛУЖБА ПІДТРИМКИ & ЗВОРОТНИЙ ЗВ'ЯЗОК</b>\n"
-        "────────────────────────────\n"
-        "Введіть ваше запитання, пропозицію або повідомлення про помилку у чат:\n\n"
-        "<i>Оператор відповість вам у найкоротший термін!</i>",
+        bot_ui.heading("💬", "Підтримка", "Напишіть повідомлення одним текстом")
+        + "\n\nОпишіть питання, проблему або пропозицію. Звернення потрапить до команди, а відповідь прийде сюди.",
         mkb(back_btn("home"))
     )
 
@@ -3681,8 +3838,8 @@ async def about_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     holder = esc(s.get('payment_holder', 'FunsDiia Service'))
 
     text = (
-        f"🪪 <b>FunsDiia Bot</b> — Автоматизований сервіс генерації та деплою персональних веб-кабінетів документів.\n\n"
-        f"<b>ЯК ЦЕ ПРАЦЮЄ:</b>\n"
+        bot_ui.heading("🪪", "FunsDiia Bot", "Персональний кабінет і документи")
+        + "\n\n<b>Як це працює</b>\n"
         f"1️⃣ Заповнюйте свої дані один раз у розділі 👤 <b>Профіль</b>\n"
         f"2️⃣ Обирайте бажаний термін дії у 🛒 <b>Каталозі</b>\n"
         f"3️⃣ Оплачуйте замовлення та отримуйте ваше індивідуальне посилання\n"
@@ -3780,6 +3937,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(parts) > 1 and parts[1] in users:
                 return await _send_user_card(update, context, parts[1], users[parts[1]])
         if d.startswith("adm_direct_balance:"):return await adm_direct_balance(update, context)
+        if d.startswith("adm_payment:"):      return await adm_payment_confirm(update, context)
+        if d.startswith("adm_payment_do:"):   return await adm_payment_apply(update, context)
+        if d.startswith("adm_ban_do:"):       return await adm_ban_apply(update, context)
         if d.startswith("adm_approve_deploy:"): return await adm_approve_deploy(update, context)
         if d.startswith("adm_approve:"):       return await adm_approve(update, context)
         if d.startswith("adm_reject:"):        return await adm_reject(update, context)
@@ -3804,6 +3964,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if d.startswith("promo_stat:"):        return await promo_stat(update, context)
         if d.startswith("promo_del_confirm:"): return await promo_del_confirm(update, context)
         if d.startswith("promo_del_do:"):      return await promo_del_do(update, context)
+        if d.startswith("broadcast_segment:"): return await broadcast_segment(update, context)
         if d.startswith("cast_tmpl:"):         return await cast_select_template(update, context)
         if d.startswith("reply_fb:"):          return await reply_fb(update, context)
         if d.startswith("adm_ban:"):           return await adm_ban(update, context)
