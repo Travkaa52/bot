@@ -1012,6 +1012,10 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     ref_link = f"https://t.me/{BOT_USERNAME}?start={uid}"
     vip_label = "👑 VIP Клієнт" if u.get("vip") else "👤 Стандартний профіль"
+    profile_id = f"<code>{uid}</code>"
+    balance_display = f"<code>{u.get('balance', 0)}₴</code>"
+    referrals_display = f"<code>{u.get('ref_count', 0)}</code>"
+    latin_name_display = f"<code>{esc(fio_en)}</code>"
 
     pages_url = last_order.get("pages_url") if last_order else None
     cabinet_status = ""
@@ -1023,15 +1027,15 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = (
         bot_ui.heading("👤", "Профіль користувача", vip_label)
-        + f"\n{bot_ui.row('ID', f'<code>{uid}</code>', '🆔')}"
-        + f"\n{bot_ui.row('Баланс', f'<code>{u.get('balance', 0)}₴</code>', '💰')}"
-        + f"\n{bot_ui.row('Реферали', f'<code>{u.get('ref_count', 0)}</code>', '👥')}"
+        + f"\n{bot_ui.row('ID', profile_id, '🆔')}"
+        + f"\n{bot_ui.row('Баланс', balance_display, '💰')}"
+        + f"\n{bot_ui.row('Реферали', referrals_display, '👥')}"
         + cabinet_status
         + bot_ui.section("Заповнення профілю")
         + f"\n{progress_bar}"
         + bot_ui.section("Документи")
         + f"\n{bot_ui.row('ПІБ', esc(fio), '📝')}"
-        + f"\n{bot_ui.row('ПІБ латиницею', f'<code>{esc(fio_en)}</code>', '🔤')}"
+        + f"\n{bot_ui.row('ПІБ латиницею', latin_name_display, '🔤')}"
         + f"\n{bot_ui.row('Дата народження', esc(dob), '📅')}"
         + f"\n{bot_ui.row('Стать', sex, '👤')}"
         + f"\n{bot_ui.row('Адреса', esc(addr), '🏠')}"
@@ -1273,11 +1277,12 @@ async def my_orders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     total_spent = sum(o.get("final_price", 0) for _, o in my if o.get("status") in ("deployed", "completed", "approved"))
+    total_spent_display = f"{total_spent}₴"
 
     text = (
         bot_ui.heading("📂", "Мої замовлення", "Оберіть замовлення для перегляду деталей")
         + f"\n{bot_ui.row('Усього', len(my), '📦')}"
-        + f"\n{bot_ui.row('Інвестовано', f'{total_spent}₴', '💳')}"
+        + f"\n{bot_ui.row('Інвестовано', total_spent_display, '💳')}"
     )
 
     kb_rows = []
@@ -2435,12 +2440,13 @@ async def adm_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_revenue = sum(o.get("final_price", 0) for o in orders.values() if o.get("status") in ("completed", "deployed"))
     
     paid_orders = sum(1 for order in orders.values() if infer_payment_state(order) == "paid")
+    total_revenue_display = f"{total_revenue}₴"
     text = (
         bot_ui.heading("📊", "Аналітика системи", "Оперативна статистика бота")
         + f"\n{bot_ui.row('Користувачі', len(users), '👥')}"
         + f"\n{bot_ui.row('Замовлення', len(orders), '📦')}"
         + f"\n{bot_ui.row('Оплачені замовлення', paid_orders, '💳')}"
-        + f"\n{bot_ui.row('Підтверджений дохід', f'{total_revenue}₴', '💰')}"
+        + f"\n{bot_ui.row('Підтверджений дохід', total_revenue_display, '💰')}"
     )
     await safe_edit(q, text, mkb(back_btn("admin_panel")))
 
